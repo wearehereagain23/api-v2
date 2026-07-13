@@ -203,9 +203,7 @@ export default async function handler(req, res) {
       { user_id: recipientData.uuid, title: "Local Funds Deposited", message: `Received ${recipientCreditAmount} ${recipientSymbol} from ${senderFullName}.`, status: "unread" }
     ]);
 
-
     // Send notifications via SMTP (Synchronized Symmetrical Flow)
-
     try {
       if (
         adminConfig.smtp_host &&
@@ -263,63 +261,42 @@ export default async function handler(req, res) {
           `You have received ${recipientSymbol}${recipientCreditAmount.toFixed(2)} from ${senderFullName} on ${formattedDateString}.`;
 
         await Promise.all([
-
           transporter.sendMail({
-
             from: `"${brandName}" <${senderEmail}>`,
-
             to: senderData.email.trim(),
-
             replyTo: senderEmail,
-
             subject: "Debit Transaction Notification",
-
             html: unifiedLayout(
               senderData.firstname || "Customer",
               debitText
             ),
-
             headers: {
               "Auto-Submitted": "auto-generated",
               "X-Auto-Response-Suppress": "OOF, AutoReply",
               "Errors-To": senderEmail
             }
-
           }),
-
           transporter.sendMail({
-
             from: `"${brandName}" <${senderEmail}>`,
-
             to: recipientData.email.trim(),
-
             replyTo: senderEmail,
-
             subject: "Credit Transaction Notification",
-
             html: unifiedLayout(
               recipientData.firstname || "Customer",
               creditText
             ),
-
             headers: {
               "Auto-Submitted": "auto-generated",
               "X-Auto-Response-Suppress": "OOF, AutoReply",
               "Errors-To": senderEmail
             }
-
           })
-
         ]);
 
         console.log("✓ Transaction emails sent.");
-
       }
-
     } catch (err) {
-
       console.error("Email delivery error:", err.message);
-
     }
 
     return res.status(200).json({ success: true, message: "Ledger clearance transaction executed successfully." });
