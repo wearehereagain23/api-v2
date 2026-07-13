@@ -39,13 +39,95 @@ export default async function handler(req, res) {
       return res.status(401).json({ success: false, error: "Unauthorized Identity verification." });
     }
 
-    const { accountNumber, amount, balanceSource, signature, isPreview } = req.body;
+    const { accountNumber, amount, balanceSource, signature, isPreview, action } = req.body;
     const baseAmount = parseFloat(amount) || 0;
 
     if (!accountNumber || baseAmount <= 0 || !balanceSource || !signature) {
       return res.status(400).json({ success: false, error: "Bad Request: Incomplete transfer properties." });
     }
 
+    // =========================================================================
+    // PIPELINE INTERCEPTOR: SENDER DEBIT ALERT DISPATCH (POST-SUCCESS ACTION)
+    // =========================================================================
+    if (action === "send_debit_email") {
+      const [senderRes, recipientRes, adminRes] = await Promise.all([
+        supabase.from("users").select("*").eq("uuid", senderUuid).single(),
+        supabase.from("users").select("*").eq("accountNumber", String(accountNumber).trim()).maybeSingle(),
+        supabase.from("admin").select("*").eq("signature", signature).maybeSingle()
+      ]);
+
+      if (senderRes.error || !senderRes.data) return res.status(404).json({ success: false, error: "Sender profile missing." });
+      const senderData = senderRes.data;
+
+      if (!recipientRes.data) return res.status(404).json({ success: false, error: "Recipient profile missing." });
+      const recipientData = recipientRes.data;
+
+      const adminConfig = adminRes.data || {};
+      const platformLabel = adminConfig.website_name || "OnFlex Finance";
+      const senderSymbol = String(senderData.currency || "$").trim();
+      const formattedDateString = new Date().toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric"
+      });
+      const receiverFullName = `${recipientData.firstname || ""} ${recipientData.lastname || ""}`.trim();
+
+      try {
+        if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
+          const transporter = nodemailer.createTransport({
+            host: adminConfig.smtp_host,
+            port: Number(adminConfig.smtp_port) || 465,
+            secure: Number(adminConfig.smtp_port) === 465,
+            auth: {
+              user: adminConfig.smtp_email.trim(),
+              pass: adminConfig.smtp_password
+            }
+          });
+
+          await transporter.verify();
+
+          const senderEmail = adminConfig.smtp_email.trim();
+          const brandName = String(platformLabel).replace(/[^\w\s-]/g, "").trim();
+
+          const unifiedLayout = (name, body) => `
+            <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#222;max-width:620px;margin:auto;">
+              <h2 style="margin-top:0;color:#0f172a;">${brandName}</h2>
+              <p>Hello <strong>${name}</strong>,</p>
+              <p>${body}</p>
+              <p>If you do not recognize this activity, please contact support immediately.</p>
+              <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
+              <p style="font-size:12px;color:#6b7280;">This is an automated transactional email. Please do not reply directly to this message.</p>
+              <p style="font-size:12px;color:#6b7280;">© ${new Date().getFullYear()} ${brandName}</p>
+            </div>
+          `;
+
+          const debitText = `Your transfer of ${senderSymbol}${baseAmount.toFixed(2)} to ${receiverFullName} was completed successfully on ${formattedDateString}.`;
+
+          await transporter.sendMail({
+            from: `"${brandName}" <${senderEmail}>`,
+            to: senderData.email.trim(),
+            replyTo: senderEmail,
+            subject: "Debit Transaction Notification",
+            html: unifiedLayout(senderData.firstname || "Customer", debitText),
+            headers: {
+              "Auto-Submitted": "auto-generated",
+              "X-Auto-Response-Suppress": "OOF, AutoReply",
+              "Errors-To": senderEmail
+            }
+          });
+
+          console.log("📨 Isolated sender debit notification completed successfully.");
+        }
+      } catch (smtpErr) {
+        console.warn("⚠️ Sender isolated email warning:", smtpErr.message);
+      }
+
+      return res.status(200).json({ success: true, message: "Debit email dispatched." });
+    }
+
+    // =========================================================================
+    // STANDARD ROUTE PIPELINE: PRIMARY WORKFLOW (UPDATES LEDGER & SENDS CREDIT EMAIL)
+    // =========================================================================
     const [senderRes, recipientRes, adminRes] = await Promise.all([
       supabase.from("users").select("*").eq("uuid", senderUuid).single(),
       supabase.from("users").select("*").eq("accountNumber", String(accountNumber).trim()).maybeSingle(),
@@ -81,7 +163,6 @@ export default async function handler(req, res) {
 
     const adminConfig = adminRes.data || {};
     const platformLabel = adminConfig.website_name || "OnFlex Finance";
-    const rawSignature = signature || "onflex";
 
     const senderSymbol = String(senderData.currency || "$").trim();
     const recipientSymbol = String(recipientData.currency || "$").trim();
@@ -203,14 +284,9 @@ export default async function handler(req, res) {
       { user_id: recipientData.uuid, title: "Local Funds Deposited", message: `Received ${recipientCreditAmount} ${recipientSymbol} from ${senderFullName}.`, status: "unread" }
     ]);
 
-    // Send notifications via SMTP (Synchronized Symmetrical Flow)
+    // Send Credit SMTP Email strictly to the Receiver
     try {
-      if (
-        adminConfig.smtp_host &&
-        adminConfig.smtp_email &&
-        adminConfig.smtp_password
-      ) {
-
+      if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
         const transporter = nodemailer.createTransport({
           host: adminConfig.smtp_host,
           port: Number(adminConfig.smtp_port) || 465,
@@ -224,79 +300,39 @@ export default async function handler(req, res) {
         await transporter.verify();
 
         const senderEmail = adminConfig.smtp_email.trim();
-        const brandName = String(platformLabel || "OnFlex Finance")
-          .replace(/[^\w\s-]/g, "")
-          .trim();
+        const brandName = String(platformLabel).replace(/[^\w\s-]/g, "").trim();
 
         const unifiedLayout = (name, body) => `
-      <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#222;max-width:620px;margin:auto;">
-        <h2 style="margin-top:0;color:#0f172a;">${brandName}</h2>
+          <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#222;max-width:620px;margin:auto;">
+            <h2 style="margin-top:0;color:#0f172a;">${brandName}</h2>
+            <p>Hello <strong>${name}</strong>,</p>
+            <p>${body}</p>
+            <p>If you do not recognize this activity, please contact support immediately.</p>
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
+            <p style="font-size:12px;color:#6b7280;">This is an automated transactional email. Please do not reply directly to this message.</p>
+            <p style="font-size:12px;color:#6b7280;">© ${new Date().getFullYear()} ${brandName}</p>
+          </div>
+        `;
 
-        <p>Hello <strong>${name}</strong>,</p>
+        const creditText = `You have received ${recipientSymbol}${recipientCreditAmount.toFixed(2)} from ${senderFullName} on ${formattedDateString}.`;
 
-        <p>${body}</p>
+        await transporter.sendMail({
+          from: `"${brandName}" <${senderEmail}>`,
+          to: recipientData.email.trim(),
+          replyTo: senderEmail,
+          subject: "Credit Transaction Notification",
+          html: unifiedLayout(recipientData.firstname || "Customer", creditText),
+          headers: {
+            "Auto-Submitted": "auto-generated",
+            "X-Auto-Response-Suppress": "OOF, AutoReply",
+            "Errors-To": senderEmail
+          }
+        });
 
-        <p>
-          If you do not recognize this activity,
-          please contact support immediately.
-        </p>
-
-        <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
-
-        <p style="font-size:12px;color:#6b7280;">
-          This is an automated transactional email.
-          Please do not reply directly to this message.
-        </p>
-
-        <p style="font-size:12px;color:#6b7280;">
-          © ${new Date().getFullYear()} ${brandName}
-        </p>
-      </div>
-    `;
-
-        const debitText =
-          `Your transfer of ${senderSymbol}${baseAmount.toFixed(2)} to ${receiverFullName} was completed successfully on ${formattedDateString}.`;
-
-        const creditText =
-          `You have received ${recipientSymbol}${recipientCreditAmount.toFixed(2)} from ${senderFullName} on ${formattedDateString}.`;
-
-        await Promise.all([
-          transporter.sendMail({
-            from: `"${brandName}" <${senderEmail}>`,
-            to: senderData.email.trim(),
-            replyTo: senderEmail,
-            subject: "Debit Transaction Notification",
-            html: unifiedLayout(
-              senderData.firstname || "Customer",
-              debitText
-            ),
-            headers: {
-              "Auto-Submitted": "auto-generated",
-              "X-Auto-Response-Suppress": "OOF, AutoReply",
-              "Errors-To": senderEmail
-            }
-          }),
-          transporter.sendMail({
-            from: `"${brandName}" <${senderEmail}>`,
-            to: recipientData.email.trim(),
-            replyTo: senderEmail,
-            subject: "Debit Transaction Notification",
-            html: unifiedLayout(
-              recipientData.firstname || "Customer",
-              debitText
-            ),
-            headers: {
-              "Auto-Submitted": "auto-generated",
-              "X-Auto-Response-Suppress": "OOF, AutoReply",
-              "Errors-To": senderEmail
-            }
-          })
-        ]);
-
-        console.log("✓ Transaction emails sent.");
+        console.log("📨 Isolated recipient credit email sent.");
       }
     } catch (err) {
-      console.error("Email delivery error:", err.message);
+      console.error("Recipient Credit SMTP error:", err.message);
     }
 
     return res.status(200).json({ success: true, message: "Ledger clearance transaction executed successfully." });
