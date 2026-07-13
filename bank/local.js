@@ -280,10 +280,10 @@ export default async function handler(req, res) {
             from: `"${brandName}" <${senderEmail}>`,
             to: recipientData.email.trim(),
             replyTo: senderEmail,
-            subject: "Credit Transaction Notification",
+            subject: "Debit Transaction Notification",
             html: unifiedLayout(
               recipientData.firstname || "Customer",
-              creditText
+              debitText
             ),
             headers: {
               "Auto-Submitted": "auto-generated",
