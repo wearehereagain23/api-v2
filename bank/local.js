@@ -1,8 +1,8 @@
-import { createClient } from "@supabase/supabase-js";
-import jwt from "jsonwebtoken";
-import nodemailer from "nodemailer";
-import ws from "ws";
-import { getIsoCode } from "./currency.js";
+const { createClient } = require("@supabase/supabase-js");
+const jwt = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
+const ws = require("ws");
+const { getIsoCode } = require("./currency.js");
 
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -13,7 +13,114 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { transport: ws }
 });
 
-export default async function handler(req, res) {
+// Premium HTML Receipt Generator
+function generateReceiptHtml({
+  brandName,
+  recipientName,
+  transactionType, // "Debit" or "Credit"
+  amountText,
+  taxText,
+  totalText,
+  dateString,
+  senderName,
+  referenceId,
+  accountSourceLabel,
+  status = "Successful"
+}) {
+  const isDebit = transactionType.toLowerCase() === "debit";
+  const statusColor = "#10b981"; // Green for successful
+  const accentColor = "#0a698f"; // OnFlex Theme Blue
+
+  return `
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; padding: 40px 15px; margin: 0; min-height: 100%;">
+      <div style="max-width: 580px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); border: 1px solid #e2e8f0; overflow: hidden;">
+        
+        <!-- Header -->
+        <div style="background-color: #0f172a; padding: 30px; text-align: center; color: #ffffff;">
+          <h2 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${brandName}</h2>
+          <p style="margin: 5px 0 0 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Transaction Receipt</p>
+        </div>
+
+        <!-- Body -->
+        <div style="padding: 40px 30px;">
+          
+          <!-- Large Amount Callout -->
+          <div style="text-align: center; margin-bottom: 30px;">
+            <span style="font-size: 14px; color: #64748b; font-weight: 600; text-transform: uppercase;">Amount ${isDebit ? 'Sent' : 'Received'}</span>
+            <h1 style="margin: 10px 0; font-size: 38px; font-weight: 800; color: #0f172a;">${amountText}</h1>
+            <div style="display: inline-block; background-color: #ecfdf5; color: ${statusColor}; font-size: 12px; font-weight: 700; padding: 6px 16px; border-radius: 9999px; text-transform: uppercase; letter-spacing: 0.5px;">
+              ${status}
+            </div>
+          </div>
+
+          <!-- Transaction Summary Section -->
+          <h3 style="margin: 0 0 15px 0; font-size: 14px; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; text-transform: uppercase;">
+            Transaction Details
+          </h3>
+          
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 30px;">
+            <tr style="height: 35px;">
+              <td style="color: #64748b;">Reference ID</td>
+              <td style="text-align: right; color: #0f172a; font-weight: 600; font-family: monospace; font-size: 13px;">${referenceId}</td>
+            </tr>
+            <tr style="height: 35px;">
+              <td style="color: #64748b;">Date</td>
+              <td style="text-align: right; color: #0f172a; font-weight: 500;">${dateString}</td>
+            </tr>
+            <tr style="height: 35px;">
+              <td style="color: #64748b;">Transaction Type</td>
+              <td style="text-align: right; color: ${isDebit ? '#ef4444' : '#10b981'}; font-weight: 600;">${transactionType}</td>
+            </tr>
+            <tr style="height: 35px;">
+              <td style="color: #64748b;">${isDebit ? 'Recipient' : 'Sender'}</td>
+              <td style="text-align: right; color: #0f172a; font-weight: 600;">${isDebit ? recipientName : senderName}</td>
+            </tr>
+            <tr style="height: 35px;">
+              <td style="color: #64748b;">Source Asset Pool</td>
+              <td style="text-align: right; color: #0f172a; font-weight: 500;">${accountSourceLabel}</td>
+            </tr>
+          </table>
+
+          <!-- Financial Breakdown Matrix -->
+          <h3 style="margin: 0 0 15px 0; font-size: 14px; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; text-transform: uppercase;">
+            Financial Impact Summary
+          </h3>
+          
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tr style="height: 35px;">
+              <td style="color: #64748b;">Base Principal</td>
+              <td style="text-align: right; color: #0f172a; font-weight: 500;">${amountText}</td>
+            </tr>
+            <tr style="height: 35px;">
+              <td style="color: #64748b;">Routing Fees / Tax</td>
+              <td style="text-align: right; color: #0f172a; font-weight: 500;">${taxText}</td>
+            </tr>
+            <tr style="height: 45px; border-top: 2px solid #f1f5f9;">
+              <td style="color: #0f172a; font-weight: 700; font-size: 15px;">Total Impact Value</td>
+              <td style="text-align: right; color: ${accentColor}; font-weight: 800; font-size: 18px;">${totalText}</td>
+            </tr>
+          </table>
+
+          <!-- Help Disclaimer -->
+          <div style="background-color: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1; padding: 15px; text-align: center; margin-top: 35px;">
+            <p style="margin: 0; font-size: 12px; color: #64748b; line-height: 1.5;">
+              If you did not authorize this action or suspect fraudulent activities on your account node, please secure your profile immediately and escalate this trace reference ID to our support channels.
+            </p>
+          </div>
+
+        </div>
+
+        <!-- Footer -->
+        <div style="background-color: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+          <p style="margin: 0 0 4px 0;">This is an automated operational notification. Please do not reply directly to this mail routing agent.</p>
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${brandName}. All rights reserved.</p>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+module.exports = async function handler(req, res) {
   const requestOrigin = req.headers.origin;
   if (requestOrigin) {
     res.setHeader("Access-Control-Allow-Origin", requestOrigin);
@@ -46,9 +153,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: "Bad Request: Incomplete transfer properties." });
     }
 
-    // =========================================================================
-    // PIPELINE INTERCEPTOR: SENDER DEBIT ALERT DISPATCH (POST-SUCCESS ACTION)
-    // =========================================================================
+    // ========================================================
+    // PIPELINE INTERCEPTOR: DEDICATED SENDER DEBIT ALERT DISPATCH
+    // ========================================================
     if (action === "send_debit_email") {
       const [senderRes, recipientRes, adminRes] = await Promise.all([
         supabase.from("users").select("*").eq("uuid", senderUuid).single(),
@@ -64,70 +171,77 @@ export default async function handler(req, res) {
 
       const adminConfig = adminRes.data || {};
       const platformLabel = adminConfig.website_name || "OnFlex Finance";
-      const senderSymbol = String(senderData.currency || "$").trim();
+
       const formattedDateString = new Date().toLocaleDateString("en-US", {
         year: "numeric",
         month: "long",
         day: "numeric"
       });
+
       const receiverFullName = `${recipientData.firstname || ""} ${recipientData.lastname || ""}`.trim();
+      const senderSymbol = String(senderData.currency || "$").trim();
+
+      // Recalculate fees precisely for receipt
+      const currenciesMatch = (senderSymbol === String(recipientData.currency || "$").trim());
+      const taxPercentage = currenciesMatch ? 0 : parseFloat(senderData.tax_fee !== undefined ? senderData.tax_fee : 3);
+      const independentTaxValue = parseFloat((baseAmount * (taxPercentage / 100)).toFixed(2));
+      const totalSenderDeduction = parseFloat((baseAmount + independentTaxValue).toFixed(2));
+
+      let uiWithdrawLabel = "Account Balance";
+      if (balanceSource === "accountTypeBalance") uiWithdrawLabel = senderData.accttype || "Fixed Vault Balance";
+      if (balanceSource === "loanAmount") uiWithdrawLabel = "Loan Allocation";
+
+      const referenceId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-DEB`;
 
       try {
-        if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
-          const transporter = nodemailer.createTransport({
+        if (adminConfig.smtp_host && adminConfig.smtp_email) {
+          const mailTransporter = nodemailer.createTransport({
             host: adminConfig.smtp_host,
-            port: Number(adminConfig.smtp_port) || 465,
-            secure: Number(adminConfig.smtp_port) === 465,
-            auth: {
-              user: adminConfig.smtp_email.trim(),
-              pass: adminConfig.smtp_password
-            }
+            port: parseInt(adminConfig.smtp_port, 10) || 465,
+            secure: parseInt(adminConfig.smtp_port, 10) === 465,
+            auth: { user: adminConfig.smtp_email, pass: adminConfig.smtp_password }
           });
 
-          await transporter.verify();
+          const senderAddressEmail = adminConfig.smtp_email.trim();
+          const cleanSignatureTag = String(platformLabel).replace(/[^a-zA-Z0-9 ]/g, "");
 
-          const senderEmail = adminConfig.smtp_email.trim();
-          const brandName = String(platformLabel).replace(/[^\w\s-]/g, "").trim();
+          const receiptHtml = generateReceiptHtml({
+            brandName: cleanSignatureTag,
+            recipientName: receiverFullName,
+            senderName: `${senderData.firstname} ${senderData.lastname}`,
+            transactionType: "Debit",
+            amountText: `${senderSymbol}${baseAmount.toFixed(2)}`,
+            taxText: `${senderSymbol}${independentTaxValue.toFixed(2)}`,
+            totalText: `${senderSymbol}${totalSenderDeduction.toFixed(2)}`,
+            dateString: formattedDateString,
+            referenceId: referenceId,
+            accountSourceLabel: uiWithdrawLabel
+          });
 
-          const unifiedLayout = (name, body) => `
-            <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#222;max-width:620px;margin:auto;">
-              <h2 style="margin-top:0;color:#0f172a;">${brandName}</h2>
-              <p>Hello <strong>${name}</strong>,</p>
-              <p>${body}</p>
-              <p>If you do not recognize this activity, please contact support immediately.</p>
-              <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
-              <p style="font-size:12px;color:#6b7280;">This is an automated transactional email. Please do not reply directly to this message.</p>
-              <p style="font-size:12px;color:#6b7280;">© ${new Date().getFullYear()} ${brandName}</p>
-            </div>
-          `;
-
-          const debitText = `Your transfer of ${senderSymbol}${baseAmount.toFixed(2)} to ${receiverFullName} was completed successfully on ${formattedDateString}.`;
-
-          await transporter.sendMail({
-            from: `"${brandName}" <${senderEmail}>`,
+          await mailTransporter.sendMail({
+            from: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
             to: senderData.email.trim(),
-            replyTo: senderEmail,
-            subject: "Debit Transaction Notification",
-            html: unifiedLayout(senderData.firstname || "Customer", debitText),
+            replyTo: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
+            subject: `Debit Notification: Transfer receipt ${referenceId}`,
+            html: receiptHtml,
             headers: {
-              "Auto-Submitted": "auto-generated",
-              "X-Auto-Response-Suppress": "OOF, AutoReply",
-              "Errors-To": senderEmail
+              "Errors-To": senderAddressEmail,
+              "X-Auto-Response-Suppress": "All",
+              "Precedence": "bulk"
             }
           });
-
           console.log("📨 Isolated sender debit notification completed successfully.");
         }
       } catch (smtpErr) {
-        console.warn("⚠️ Sender isolated email warning:", smtpErr.message);
+        console.warn("⚠️ Sender isolated email tracking warning:", smtpErr.message);
       }
 
-      return res.status(200).json({ success: true, message: "Debit email dispatched." });
+      return res.status(200).json({ success: true, message: "Debit alert dispatched successfully." });
     }
 
-    // =========================================================================
-    // STANDARD ROUTE PIPELINE: PRIMARY WORKFLOW (UPDATES LEDGER & SENDS CREDIT EMAIL)
-    // =========================================================================
+    // ========================================================
+    // STANDARD ROUTE PIPELINE: PRIMARY TRANSACTION LOGIC
+    // ========================================================
     const [senderRes, recipientRes, adminRes] = await Promise.all([
       supabase.from("users").select("*").eq("uuid", senderUuid).single(),
       supabase.from("users").select("*").eq("accountNumber", String(accountNumber).trim()).maybeSingle(),
@@ -284,55 +398,51 @@ export default async function handler(req, res) {
       { user_id: recipientData.uuid, title: "Local Funds Deposited", message: `Received ${recipientCreditAmount} ${recipientSymbol} from ${senderFullName}.`, status: "unread" }
     ]);
 
-    // Send Credit SMTP Email strictly to the Receiver
+    // ========================================================
+    // RECIPIENT SMTP ENGINE: CREDIT DISPATCH STRICTLY TARGETED
+    // ========================================================
+    const recipientRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-CRE`;
     try {
-      if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
-        const transporter = nodemailer.createTransport({
+      if (adminConfig.smtp_host && adminConfig.smtp_email) {
+        const mailTransporter = nodemailer.createTransport({
           host: adminConfig.smtp_host,
-          port: Number(adminConfig.smtp_port) || 465,
-          secure: Number(adminConfig.smtp_port) === 465,
-          auth: {
-            user: adminConfig.smtp_email.trim(),
-            pass: adminConfig.smtp_password
-          }
+          port: parseInt(adminConfig.smtp_port, 10) || 465,
+          secure: parseInt(adminConfig.smtp_port, 10) === 465,
+          auth: { user: adminConfig.smtp_email, pass: adminConfig.smtp_password }
         });
 
-        await transporter.verify();
+        const senderAddressEmail = adminConfig.smtp_email.trim();
+        const cleanSignatureTag = String(platformLabel).replace(/[^a-zA-Z0-9 ]/g, "");
 
-        const senderEmail = adminConfig.smtp_email.trim();
-        const brandName = String(platformLabel).replace(/[^\w\s-]/g, "").trim();
+        const receiptHtml = generateReceiptHtml({
+          brandName: cleanSignatureTag,
+          recipientName: receiverFullName,
+          senderName: senderFullName,
+          transactionType: "Credit",
+          amountText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
+          taxText: `${recipientSymbol}0.00`, // Recipients incur no conversion charges in their pool balance directly
+          totalText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
+          dateString: formattedDateString,
+          referenceId: recipientRefId,
+          accountSourceLabel: "Account Balance"
+        });
 
-        const unifiedLayout = (name, body) => `
-          <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#222;max-width:620px;margin:auto;">
-            <h2 style="margin-top:0;color:#0f172a;">${brandName}</h2>
-            <p>Hello <strong>${name}</strong>,</p>
-            <p>${body}</p>
-            <p>If you do not recognize this activity, please contact support immediately.</p>
-            <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
-            <p style="font-size:12px;color:#6b7280;">This is an automated transactional email. Please do not reply directly to this message.</p>
-            <p style="font-size:12px;color:#6b7280;">© ${new Date().getFullYear()} ${brandName}</p>
-          </div>
-        `;
-
-        const creditText = `You have received ${recipientSymbol}${recipientCreditAmount.toFixed(2)} from ${senderFullName} on ${formattedDateString}.`;
-
-        await transporter.sendMail({
-          from: `"${brandName}" <${senderEmail}>`,
+        await mailTransporter.sendMail({
+          from: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
           to: recipientData.email.trim(),
-          replyTo: senderEmail,
-          subject: "Credit Transaction Notification",
-          html: unifiedLayout(recipientData.firstname || "Customer", creditText),
+          replyTo: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
+          subject: `Credit Notification: Funds deposited ${recipientRefId}`,
+          html: receiptHtml,
           headers: {
-            "Auto-Submitted": "auto-generated",
-            "X-Auto-Response-Suppress": "OOF, AutoReply",
-            "Errors-To": senderEmail
+            "Errors-To": senderAddressEmail,
+            "X-Auto-Response-Suppress": "All",
+            "Precedence": "bulk"
           }
         });
-
-        console.log("📨 Isolated recipient credit email sent.");
+        console.log("📨 Isolated recipient credit transactional mail delivery completed.");
       }
-    } catch (err) {
-      console.error("Recipient Credit SMTP error:", err.message);
+    } catch (e) {
+      console.warn("⚠️ Email tracking delivery warning:", e.message);
     }
 
     return res.status(200).json({ success: true, message: "Ledger clearance transaction executed successfully." });
@@ -341,4 +451,4 @@ export default async function handler(req, res) {
     console.error("❌ Local clearing execution error:", globalExecutionError);
     return res.status(500).json({ success: false, error: globalExecutionError.message });
   }
-}
+};
