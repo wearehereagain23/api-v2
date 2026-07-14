@@ -1,8 +1,8 @@
-const { createClient } = require("@supabase/supabase-js");
-const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
-const ws = require("ws");
-const { getIsoCode } = require("./currency.js");
+import { createClient } from "@supabase/supabase-js";
+import jwt from "jsonwebtoken";
+import nodemailer from "nodemailer";
+import ws from "ws";
+import { getIsoCode } from "./currency.js";
 
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -13,7 +13,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { transport: ws }
 });
 
-// Premium HTML Receipt Generator
+// Premium HTML Receipt Template Generator
 function generateReceiptHtml({
   brandName,
   recipientName,
@@ -35,16 +35,13 @@ function generateReceiptHtml({
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; padding: 40px 15px; margin: 0; min-height: 100%;">
       <div style="max-width: 580px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); border: 1px solid #e2e8f0; overflow: hidden;">
         
-        <!-- Header -->
         <div style="background-color: #0f172a; padding: 30px; text-align: center; color: #ffffff;">
           <h2 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${brandName}</h2>
           <p style="margin: 5px 0 0 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Transaction Receipt</p>
         </div>
 
-        <!-- Body -->
         <div style="padding: 40px 30px;">
           
-          <!-- Large Amount Callout -->
           <div style="text-align: center; margin-bottom: 30px;">
             <span style="font-size: 14px; color: #64748b; font-weight: 600; text-transform: uppercase;">Amount ${isDebit ? 'Sent' : 'Received'}</span>
             <h1 style="margin: 10px 0; font-size: 38px; font-weight: 800; color: #0f172a;">${amountText}</h1>
@@ -53,7 +50,6 @@ function generateReceiptHtml({
             </div>
           </div>
 
-          <!-- Transaction Summary Section -->
           <h3 style="margin: 0 0 15px 0; font-size: 14px; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; text-transform: uppercase;">
             Transaction Details
           </h3>
@@ -81,7 +77,6 @@ function generateReceiptHtml({
             </tr>
           </table>
 
-          <!-- Financial Breakdown Matrix -->
           <h3 style="margin: 0 0 15px 0; font-size: 14px; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; text-transform: uppercase;">
             Financial Impact Summary
           </h3>
@@ -101,7 +96,6 @@ function generateReceiptHtml({
             </tr>
           </table>
 
-          <!-- Help Disclaimer -->
           <div style="background-color: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1; padding: 15px; text-align: center; margin-top: 35px;">
             <p style="margin: 0; font-size: 12px; color: #64748b; line-height: 1.5;">
               If you did not authorize this action or suspect fraudulent activities on your account node, please secure your profile immediately and escalate this trace reference ID to our support channels.
@@ -110,7 +104,6 @@ function generateReceiptHtml({
 
         </div>
 
-        <!-- Footer -->
         <div style="background-color: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
           <p style="margin: 0 0 4px 0;">This is an automated operational notification. Please do not reply directly to this mail routing agent.</p>
           <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${brandName}. All rights reserved.</p>
@@ -120,7 +113,7 @@ function generateReceiptHtml({
   `;
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   const requestOrigin = req.headers.origin;
   if (requestOrigin) {
     res.setHeader("Access-Control-Allow-Origin", requestOrigin);
@@ -451,4 +444,4 @@ module.exports = async function handler(req, res) {
     console.error("❌ Local clearing execution error:", globalExecutionError);
     return res.status(500).json({ success: false, error: globalExecutionError.message });
   }
-};
+}
