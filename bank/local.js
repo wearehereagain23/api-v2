@@ -413,7 +413,7 @@ export default async function handler(req, res) {
           senderName: senderFullName,
           transactionType: "Credit",
           amountText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
-          taxText: `${recipientSymbol}0.00`, // Recipients incur no conversion charges in their pool balance directly
+          taxText: `${recipientSymbol}0.00`,
           totalText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
           dateString: formattedDateString,
           referenceId: recipientRefId,
@@ -426,10 +426,13 @@ export default async function handler(req, res) {
           replyTo: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
           subject: `Credit Notification: Funds deposited ${recipientRefId}`,
           html: receiptHtml,
+          // Cleaned headers: Removed 'Precedence: bulk' and auto-suppression keys 
+          // that trigger MailChannels 'X-MC-Relay: Bad' spam flags.
           headers: {
-            "Errors-To": senderAddressEmail,
-            "X-Auto-Response-Suppress": "All",
-            "Precedence": "bulk"
+            "MIME-Version": "1.0",
+            "X-Mailer": "Nodemailer",
+            "X-Priority": "1", // Marks the transaction as high priority
+            "Importance": "high"
           }
         });
         console.log("📨 Isolated recipient credit transactional mail delivery completed.");
