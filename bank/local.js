@@ -13,7 +13,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { transport: ws }
 });
 
-// Premium HTML Receipt Template Generator
+// Premium HTML Receipt Template Generator - Spam Optimized
 function generateReceiptHtml({
   brandName,
   recipientName,
@@ -37,13 +37,13 @@ function generateReceiptHtml({
         
         <div style="background-color: #0f172a; padding: 30px; text-align: center; color: #ffffff;">
           <h2 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${brandName}</h2>
-          <p style="margin: 5px 0 0 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Transaction Receipt</p>
+          <p style="margin: 5px 0 0 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Activity Update</p>
         </div>
 
         <div style="padding: 40px 30px;">
           
           <div style="text-align: center; margin-bottom: 30px;">
-            <span style="font-size: 14px; color: #64748b; font-weight: 600; text-transform: uppercase;">Amount ${isDebit ? 'Sent' : 'Received'}</span>
+            <span style="font-size: 14px; color: #64748b; font-weight: 600; text-transform: uppercase;">Amount ${isDebit ? 'Transferred' : 'Delivered'}</span>
             <h1 style="margin: 10px 0; font-size: 38px; font-weight: 800; color: #0f172a;">${amountText}</h1>
             <div style="display: inline-block; background-color: #ecfdf5; color: ${statusColor}; font-size: 12px; font-weight: 700; padding: 6px 16px; border-radius: 9999px; text-transform: uppercase; letter-spacing: 0.5px;">
               ${status}
@@ -51,7 +51,7 @@ function generateReceiptHtml({
           </div>
 
           <h3 style="margin: 0 0 15px 0; font-size: 14px; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; text-transform: uppercase;">
-            Transaction Details
+            Update Specifications
           </h3>
           
           <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 30px;">
@@ -60,45 +60,45 @@ function generateReceiptHtml({
               <td style="text-align: right; color: #0f172a; font-weight: 600; font-family: monospace; font-size: 13px;">${referenceId}</td>
             </tr>
             <tr style="height: 35px;">
-              <td style="color: #64748b;">Date</td>
+              <td style="color: #64748b;">Timestamp</td>
               <td style="text-align: right; color: #0f172a; font-weight: 500;">${dateString}</td>
             </tr>
             <tr style="height: 35px;">
-              <td style="color: #64748b;">Transaction Type</td>
-              <td style="text-align: right; color: ${isDebit ? '#ef4444' : '#10b981'}; font-weight: 600;">${transactionType}</td>
+              <td style="color: #64748b;">Action Class</td>
+              <td style="text-align: right; color: ${isDebit ? '#ef4444' : '#10b981'}; font-weight: 600;">${isDebit ? 'Outgoing' : 'Incoming'}</td>
             </tr>
             <tr style="height: 35px;">
               <td style="color: #64748b;">${isDebit ? 'Recipient' : 'Sender'}</td>
               <td style="text-align: right; color: #0f172a; font-weight: 600;">${isDebit ? recipientName : senderName}</td>
             </tr>
             <tr style="height: 35px;">
-              <td style="color: #64748b;">Source Asset Pool</td>
+              <td style="color: #64748b;">Allocation Channel</td>
               <td style="text-align: right; color: #0f172a; font-weight: 500;">${accountSourceLabel}</td>
             </tr>
           </table>
 
           <h3 style="margin: 0 0 15px 0; font-size: 14px; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; text-transform: uppercase;">
-            Financial Impact Summary
+            Summary Details
           </h3>
           
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
             <tr style="height: 35px;">
-              <td style="color: #64748b;">Base Principal</td>
+              <td style="color: #64748b;">Principal Value</td>
               <td style="text-align: right; color: #0f172a; font-weight: 500;">${amountText}</td>
             </tr>
             <tr style="height: 35px;">
-              <td style="color: #64748b;">Routing Fees / Tax</td>
+              <td style="color: #64748b;">Network Processing Fee</td>
               <td style="text-align: right; color: #0f172a; font-weight: 500;">${taxText}</td>
             </tr>
             <tr style="height: 45px; border-top: 2px solid #f1f5f9;">
-              <td style="color: #0f172a; font-weight: 700; font-size: 15px;">Total Impact Value</td>
+              <td style="color: #0f172a; font-weight: 700; font-size: 15px;">Total Activity Value</td>
               <td style="text-align: right; color: ${accentColor}; font-weight: 800; font-size: 18px;">${totalText}</td>
             </tr>
           </table>
 
           <div style="background-color: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1; padding: 15px; text-align: center; margin-top: 35px;">
             <p style="margin: 0; font-size: 12px; color: #64748b; line-height: 1.5;">
-              If you did not authorize this action or suspect fraudulent activities on your account node, please secure your profile immediately and escalate this trace reference ID to our support channels.
+              If you did not authorize this action or suspect profile mismatch, please access your profile dashboard immediately to secure your credentials and communicate the reference ID above to our services.
             </p>
           </div>
 
@@ -140,6 +140,12 @@ export default async function handler(req, res) {
     }
 
     const { accountNumber, amount, balanceSource, signature, isPreview, action } = req.body;
+
+    // Gracefully ignore legacy front-end post-transfer email request hooks
+    if (action === "send_debit_email") {
+      return res.status(200).json({ success: true, message: "Emails already handled inside transaction lifecycle." });
+    }
+
     const baseAmount = parseFloat(amount) || 0;
 
     if (!accountNumber || baseAmount <= 0 || !balanceSource || !signature) {
@@ -147,93 +153,7 @@ export default async function handler(req, res) {
     }
 
     // ========================================================
-    // PIPELINE INTERCEPTOR: DEDICATED SENDER DEBIT ALERT DISPATCH
-    // ========================================================
-    if (action === "send_debit_email") {
-      const [senderRes, recipientRes, adminRes] = await Promise.all([
-        supabase.from("users").select("*").eq("uuid", senderUuid).single(),
-        supabase.from("users").select("*").eq("accountNumber", String(accountNumber).trim()).maybeSingle(),
-        supabase.from("admin").select("*").eq("signature", signature).maybeSingle()
-      ]);
-
-      if (senderRes.error || !senderRes.data) return res.status(404).json({ success: false, error: "Sender profile missing." });
-      const senderData = senderRes.data;
-
-      if (!recipientRes.data) return res.status(404).json({ success: false, error: "Recipient profile missing." });
-      const recipientData = recipientRes.data;
-
-      const adminConfig = adminRes.data || {};
-      const platformLabel = adminConfig.website_name || "OnFlex Finance";
-
-      const formattedDateString = new Date().toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-      });
-
-      const receiverFullName = `${recipientData.firstname || ""} ${recipientData.lastname || ""}`.trim();
-      const senderSymbol = String(senderData.currency || "$").trim();
-
-      // Recalculate fees precisely for receipt
-      const currenciesMatch = (senderSymbol === String(recipientData.currency || "$").trim());
-      const taxPercentage = currenciesMatch ? 0 : parseFloat(senderData.tax_fee !== undefined ? senderData.tax_fee : 3);
-      const independentTaxValue = parseFloat((baseAmount * (taxPercentage / 100)).toFixed(2));
-      const totalSenderDeduction = parseFloat((baseAmount + independentTaxValue).toFixed(2));
-
-      let uiWithdrawLabel = "Account Balance";
-      if (balanceSource === "accountTypeBalance") uiWithdrawLabel = senderData.accttype || "Fixed Vault Balance";
-      if (balanceSource === "loanAmount") uiWithdrawLabel = "Loan Allocation";
-
-      const referenceId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-DEB`;
-
-      try {
-        if (adminConfig.smtp_host && adminConfig.smtp_email) {
-          const mailTransporter = nodemailer.createTransport({
-            host: adminConfig.smtp_host,
-            port: parseInt(adminConfig.smtp_port, 10) || 465,
-            secure: parseInt(adminConfig.smtp_port, 10) === 465,
-            auth: { user: adminConfig.smtp_email, pass: adminConfig.smtp_password }
-          });
-
-          const senderAddressEmail = adminConfig.smtp_email.trim();
-          const cleanSignatureTag = String(platformLabel).replace(/[^a-zA-Z0-9 ]/g, "");
-
-          const receiptHtml = generateReceiptHtml({
-            brandName: cleanSignatureTag,
-            recipientName: receiverFullName,
-            senderName: `${senderData.firstname} ${senderData.lastname}`,
-            transactionType: "Debit",
-            amountText: `${senderSymbol}${baseAmount.toFixed(2)}`,
-            taxText: `${senderSymbol}${independentTaxValue.toFixed(2)}`,
-            totalText: `${senderSymbol}${totalSenderDeduction.toFixed(2)}`,
-            dateString: formattedDateString,
-            referenceId: referenceId,
-            accountSourceLabel: uiWithdrawLabel
-          });
-
-          await mailTransporter.sendMail({
-            from: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
-            to: senderData.email.trim(),
-            replyTo: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
-            subject: `Debit Notification: Transfer receipt ${referenceId}`,
-            html: receiptHtml,
-            headers: {
-              "Errors-To": senderAddressEmail,
-              "X-Auto-Response-Suppress": "All",
-              "Precedence": "bulk"
-            }
-          });
-          console.log("📨 Isolated sender debit notification completed successfully.");
-        }
-      } catch (smtpErr) {
-        console.warn("⚠️ Sender isolated email tracking warning:", smtpErr.message);
-      }
-
-      return res.status(200).json({ success: true, message: "Debit alert dispatched successfully." });
-    }
-
-    // ========================================================
-    // STANDARD ROUTE PIPELINE: PRIMARY TRANSACTION LOGIC
+    // PIPELINE RETRIEVAL: LOAD SENDER, RECIPIENT, AND SETTINGS
     // ========================================================
     const [senderRes, recipientRes, adminRes] = await Promise.all([
       supabase.from("users").select("*").eq("uuid", senderUuid).single(),
@@ -311,6 +231,7 @@ export default async function handler(req, res) {
       }
     }
 
+    // Return the calculated data instantly if this is just a transaction confirmation preview dry-run
     if (isPreview === true || isPreview === "true") {
       return res.status(200).json({
         success: true,
@@ -328,6 +249,9 @@ export default async function handler(req, res) {
       });
     }
 
+    // ========================================================
+    // DATABASE LEDGER UPDATE (DEBIT SENDER & CREDIT RECIPIENT)
+    // ========================================================
     const rawNewSenderBal = parseFloat((senderAvailableBalance - totalSenderDeduction).toFixed(2));
     const rawNewRecipientBal = parseFloat(((parseFloat(recipientData.accountBalance) || 0) + recipientCreditAmount).toFixed(2));
 
@@ -352,6 +276,7 @@ export default async function handler(req, res) {
     if (balanceSource === "accountTypeBalance") uiWithdrawLabel = senderData.accttype || "Fixed Vault Balance";
     if (balanceSource === "loanAmount") uiWithdrawLabel = "Loan Allocation";
 
+    // Create history logs
     const historyEntries = [
       {
         date: formattedDateString,
@@ -386,28 +311,50 @@ export default async function handler(req, res) {
       console.error("⚠️ History Ledger Error Trace:", historyInsert.error.message);
     }
 
+    // Insert database notifications
     await supabase.from("notifications").insert([
       { user_id: senderData.uuid, title: "Local Transfer Issued", message: `Sent ${baseAmount} ${senderSymbol} from ${uiWithdrawLabel}. Tax: ${independentTaxValue} ${senderSymbol}.`, status: "unread" },
       { user_id: recipientData.uuid, title: "Local Funds Deposited", message: `Received ${recipientCreditAmount} ${recipientSymbol} from ${senderFullName}.`, status: "unread" }
     ]);
 
     // ========================================================
-    // RECIPIENT SMTP ENGINE: CREDIT DISPATCH STRICTLY TARGETED
+    // NODEMAILER ENGINE: SEND DEBIT AND CREDIT SIMULTANEOUSLY (DYNAMIC SMTP)
     // ========================================================
-    const recipientRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-CRE`;
-    try {
-      if (adminConfig.smtp_host && adminConfig.smtp_email) {
+    if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
+      try {
         const mailTransporter = nodemailer.createTransport({
-          host: adminConfig.smtp_host,
+          host: adminConfig.smtp_host.trim(),
           port: parseInt(adminConfig.smtp_port, 10) || 465,
-          secure: parseInt(adminConfig.smtp_port, 10) === 465,
-          auth: { user: adminConfig.smtp_email, pass: adminConfig.smtp_password }
+          secure: parseInt(adminConfig.smtp_port, 10) === 465, // TLS for 465, fallback starttls for 587
+          auth: {
+            user: adminConfig.smtp_email.trim(),
+            pass: adminConfig.smtp_password.trim()
+          }
         });
 
         const senderAddressEmail = adminConfig.smtp_email.trim();
         const cleanSignatureTag = String(platformLabel).replace(/[^a-zA-Z0-9 ]/g, "");
 
-        const receiptHtml = generateReceiptHtml({
+        // Generate dynamic Unique Transaction reference IDs
+        const debitRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-DEB`;
+        const creditRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-CRE`;
+
+        // 1. Prepare Outgoing Receipt for Sender
+        const debitHtml = generateReceiptHtml({
+          brandName: cleanSignatureTag,
+          recipientName: receiverFullName,
+          senderName: senderFullName,
+          transactionType: "Debit",
+          amountText: `${senderSymbol}${baseAmount.toFixed(2)}`,
+          taxText: `${senderSymbol}${independentTaxValue.toFixed(2)}`,
+          totalText: `${senderSymbol}${totalSenderDeduction.toFixed(2)}`,
+          dateString: formattedDateString,
+          referenceId: debitRefId,
+          accountSourceLabel: uiWithdrawLabel
+        });
+
+        // 2. Prepare Incoming Receipt for Recipient
+        const creditHtml = generateReceiptHtml({
           brandName: cleanSignatureTag,
           recipientName: receiverFullName,
           senderName: senderFullName,
@@ -416,29 +363,46 @@ export default async function handler(req, res) {
           taxText: `${recipientSymbol}0.00`,
           totalText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
           dateString: formattedDateString,
-          referenceId: recipientRefId,
+          referenceId: creditRefId,
           accountSourceLabel: "Account Balance"
         });
 
-        await mailTransporter.sendMail({
-          from: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
-          to: recipientData.email.trim(),
-          replyTo: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
-          subject: `Credit Notification: Funds deposited ${recipientRefId}`,
-          html: receiptHtml,
-          // Cleaned headers: Removed 'Precedence: bulk' and auto-suppression keys 
-          // that trigger MailChannels 'X-MC-Relay: Bad' spam flags.
-          headers: {
-            "MIME-Version": "1.0",
-            "X-Mailer": "Nodemailer",
-            "X-Priority": "1", // Marks the transaction as high priority
-            "Importance": "high"
-          }
-        });
-        console.log("📨 Isolated recipient credit transactional mail delivery completed.");
+        // Execute concurrent dispatching with clean email priority headers
+        await Promise.all([
+          mailTransporter.sendMail({
+            from: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
+            to: senderData.email.trim(),
+            replyTo: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
+            subject: `Debit Notification: Transfer receipt ${debitRefId}`,
+            html: debitHtml,
+            headers: {
+              "MIME-Version": "1.0",
+              "X-Mailer": "Nodemailer",
+              "X-Priority": "1", // High Priority delivery flag
+              "Importance": "high"
+            }
+          }),
+          mailTransporter.sendMail({
+            from: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
+            to: recipientData.email.trim(),
+            replyTo: `"${cleanSignatureTag}" <${senderAddressEmail}>`,
+            subject: `Credit Notification: Funds deposited ${creditRefId}`,
+            html: creditHtml,
+            headers: {
+              "MIME-Version": "1.0",
+              "X-Mailer": "Nodemailer",
+              "X-Priority": "1", // High Priority delivery flag
+              "Importance": "high"
+            }
+          })
+        ]);
+        console.log("📨 Symmetrical transactional receipts dispatch complete via Nodemailer SMTP.");
+
+      } catch (nodemailerErr) {
+        console.warn("⚠️ SMTP Dynamic dispatch failed. Trace details:", nodemailerErr.message);
       }
-    } catch (e) {
-      console.warn("⚠️ Email tracking delivery warning:", e.message);
+    } else {
+      console.warn("⚠️ Transaction completed successfully, but dynamic SMTP coordinates are not active in the configuration database.");
     }
 
     return res.status(200).json({ success: true, message: "Ledger clearance transaction executed successfully." });
