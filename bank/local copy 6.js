@@ -280,14 +280,11 @@ export default async function handler(req, res) {
 
         const senderAddressEmail = adminConfig.smtp_email.trim();
 
-        // Dynamic "no-reply" address to prevent users from replying to receipts
-        const noReplyEmail = `no-reply@${platformLabel}`;
-
-        // DEBIT RECEIPT (SENDER EMAIL) - Shows total deduction including tax
+        // DEBIT RECEIPT (SENDER EMAIL)
         const debitHtml = generateReceiptHtml({
           recipientName: senderData.firstname || "User",
           transactionType: "Debit",
-          amountText: `-${senderSymbol}${totalSenderDeduction.toFixed(2)}`, // Updated to show total deduction
+          amountText: `-${senderSymbol}${baseAmount.toFixed(2)}`,
           descriptionText: `Local transfer issued to ${receiverFullName}`,
           partyName: receiverFullName,
           balanceText: `${senderSymbol}${rawNewSenderBal.toFixed(2)}`,
@@ -317,8 +314,8 @@ export default async function handler(req, res) {
           mailTransporter.sendMail({
             from: `"Notification Center" <${senderAddressEmail}>`,
             to: senderData.email.trim(),
-            replyTo: `"No-Reply" <${noReplyEmail}>`, // Blocked from reply
-            subject: `Transaction Alert: Debit of ${senderSymbol}${totalSenderDeduction.toFixed(2)}`,
+            replyTo: `"Notification Center" <${senderAddressEmail}>`,
+            subject: `Transaction Alert: Debit of ${senderSymbol}${baseAmount.toFixed(2)}`,
             html: debitHtml,
             headers: {
               "MIME-Version": "1.0",
@@ -328,7 +325,7 @@ export default async function handler(req, res) {
           mailTransporter.sendMail({
             from: `"Notification Center" <${senderAddressEmail}>`,
             to: recipientData.email.trim(),
-            replyTo: `"No-Reply" <${noReplyEmail}>`, // Blocked from reply
+            replyTo: `"Notification Center" <${senderAddressEmail}>`,
             subject: `Transaction Alert: Credit of ${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
             html: creditHtml,
             headers: {
