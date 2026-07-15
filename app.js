@@ -45,6 +45,7 @@ app.use(cors({
         "Accept",
         "X-Action",
         "X-Action-Phase",
+        "x-action-phase",
         "X-Transaction-Pin",
         "X-User-UUID",
         "X-Setting-Target",
