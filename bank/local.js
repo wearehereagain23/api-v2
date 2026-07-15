@@ -13,65 +13,39 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { transport: ws }
 });
 
-// Minimal, High-Deliverability Template (Tested & Accepted by Gmail)
+// Stripped-down, minimal transaction table template (Matches proven inbox-friendly template)
 function generateReceiptHtml({
-  brandName,
   recipientName,
   transactionType, // "Debit" or "Credit"
   amountText,
-  taxText,
-  totalText,
-  dateString,
-  senderName,
-  referenceId,
-  accountSourceLabel
+  descriptionText,
+  partyName,
+  balanceText,
+  dateString
 }) {
-  const isDebit = transactionType.toLowerCase() === "debit";
-  const actionDirection = isDebit ? "allocated out of" : "allocated into";
-  const counterParty = isDebit ? recipientName : senderName;
+  const isCredit = transactionType.toLowerCase() === "credit";
+  const amountColor = isCredit ? "#14a24a" : "#d97706"; // Green for credit, Amber/Red-orange for debit
 
   return `
-    <div style="font-family: sans-serif; font-size: 14px; color: #333333; line-height: 1.6; max-width: 550px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
-      <p style="font-weight: bold; font-size: 16px; color: #0f172a; margin-top: 0; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;">
-        ${brandName} &mdash; Workspace Update
-      </p>
-      
-      <p>Hello,</p>
-      
-      <p>
-        This operational notice confirms a recent system ledger balance change on your profile. 
-        A balance of <strong>${amountText}</strong> was successfully ${actionDirection} your account (${accountSourceLabel}) 
-        in relation to <strong>${counterParty}</strong>.
-      </p>
-
-      <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0; border-left: 3px solid #0f172a;">
-        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
-          <tr style="height: 24px;">
-            <td style="color: #64748b;">Record Date:</td>
-            <td style="text-align: right; font-weight: bold; color: #334155;">${dateString}</td>
-          </tr>
-          <tr style="height: 24px;">
-            <td style="color: #64748b;">Identifier:</td>
-            <td style="text-align: right; font-weight: bold; color: #334155; font-family: monospace;">${referenceId}</td>
-          </tr>
-          <tr style="height: 24px;">
-            <td style="color: #64748b;">Transfer Fee:</td>
-            <td style="text-align: right; font-weight: bold; color: #334155;">${taxText}</td>
-          </tr>
-          <tr style="height: 24px; border-top: 1px solid #e2e8f0;">
-            <td style="color: #334155; font-weight: bold; padding-top: 5px;">Adjusted Volume:</td>
-            <td style="text-align: right; font-weight: bold; color: #0f172a; padding-top: 5px;">${totalText}</td>
-          </tr>
-        </table>
-      </div>
-
-      <p style="font-size: 12px; color: #64748b; margin-top: 30px; border-top: 1px solid #f1f5f9; padding-top: 15px;">
-        For your security, please review this system adjustment in your online personal dashboard. If this activity is unrecognized, secure your sign-in parameters immediately.
-      </p>
-      
-      <p style="font-size: 11px; color: #94a3b8; margin-top: 10px;">
-        This automated notification is issued directly by system routing schedules. Please do not reply to this mailbox.
-      </p>
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eeeeee; border-radius: 4px;">
+        <div style="background: #4b5563; padding: 15px; color: #ffffff; font-size: 18px; font-weight: bold;">
+            Transaction Notification
+        </div>
+        <div style="padding: 20px; color: #333333; line-height: 1.5;">
+            <p>Hello ${recipientName},</p>
+            <p>We are notifying you of a recent transaction on your account profile summary details.</p>
+            <hr style="border: none; border-top: 1px solid #eeeeee; margin: 15px 0;">
+            <table style="width: 100%; font-size: 14px;">
+                <tr><td style="padding: 5px 0; color: #666666;">Type:</td><td><strong>${transactionType} Alert</strong></td></tr>
+                <tr><td style="padding: 5px 0; color: #666666;">Amount:</td><td style="font-weight: bold; color: ${amountColor};">${amountText}</td></tr>
+                <tr><td style="padding: 5px 0; color: #666666;">Description:</td><td>${descriptionText}</td></tr>
+                <tr><td style="padding: 5px 0; color: #666666;">Party:</td><td>${partyName}</td></tr>
+                <tr><td style="padding: 5px 0; color: #666666;">Balance:</td><td>${balanceText}</td></tr>
+                <tr><td style="padding: 5px 0; color: #666666;">Date:</td><td>${dateString}</td></tr>
+            </table>
+            <hr style="border: none; border-top: 1px solid #eeeeee; margin: 15px 0;">
+            <p style="font-size: 12px; color: #999999;">If you did not authorize this, please contact support services instantly.</p>
+        </div>
     </div>
   `;
 }
@@ -218,9 +192,10 @@ export default async function handler(req, res) {
     if (senderUpdate.error) throw new Error(`Sender debit layer error: ${senderUpdate.error.message}`);
     if (recipientUpdate.error) throw new Error(`Recipient credit layer error: ${recipientUpdate.error.message}`);
 
+    // Standardized short date string matching your previous project ("Jun 3, 2026")
     const formattedDateString = new Date().toLocaleDateString("en-US", {
       year: "numeric",
-      month: "long",
+      month: "short",
       day: "numeric"
     });
 
@@ -286,68 +261,56 @@ export default async function handler(req, res) {
         });
 
         const senderAddressEmail = adminConfig.smtp_email.trim();
-        const cleanSignatureTag = platformLabel;
 
-        const debitRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-D`;
-        const creditRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-C`;
-
+        // DEBIT RECEIPT (SENDER EMAIL)
         const debitHtml = generateReceiptHtml({
-          brandName: cleanSignatureTag,
-          recipientName: receiverFullName,
-          senderName: senderFullName,
+          recipientName: senderData.firstname || "User",
           transactionType: "Debit",
-          amountText: `${senderSymbol}${baseAmount.toFixed(2)}`,
-          taxText: `${senderSymbol}${independentTaxValue.toFixed(2)}`,
-          totalText: `${senderSymbol}${totalSenderDeduction.toFixed(2)}`,
-          dateString: formattedDateString,
-          referenceId: debitRefId,
-          accountSourceLabel: uiWithdrawLabel
+          amountText: `-${senderSymbol}${baseAmount.toFixed(2)}`,
+          descriptionText: `Local transfer issued to ${receiverFullName}`,
+          partyName: receiverFullName,
+          balanceText: `${senderSymbol}${rawNewSenderBal.toFixed(2)}`,
+          dateString: formattedDateString
         });
 
+        // CREDIT RECEIPT (RECIPIENT EMAIL)
         const creditHtml = generateReceiptHtml({
-          brandName: cleanSignatureTag,
-          recipientName: receiverFullName,
-          senderName: senderFullName,
+          recipientName: recipientData.firstname || "User",
           transactionType: "Credit",
-          amountText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
-          taxText: `${recipientSymbol}0.00`,
-          totalText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
-          dateString: formattedDateString,
-          referenceId: creditRefId,
-          accountSourceLabel: "Account Balance"
+          amountText: `+${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
+          descriptionText: `Local funds deposited by ${senderFullName}`,
+          partyName: senderFullName,
+          balanceText: `${recipientSymbol}${rawNewRecipientBal.toFixed(2)}`,
+          dateString: formattedDateString
         });
 
         await Promise.all([
           mailTransporter.sendMail({
-            // Displayed as "Notification Center" <supportive@assistin.online>
             from: `"Notification Center" <${senderAddressEmail}>`,
             to: senderData.email.trim(),
             replyTo: `"Notification Center" <${senderAddressEmail}>`,
-            subject: `System Update: Account Allocation Adjustment ${debitRefId}`,
+            // Simple proven subject format
+            subject: `Transaction Alert: Debit of ${senderSymbol}${baseAmount.toFixed(2)}`,
             html: debitHtml,
             headers: {
               "MIME-Version": "1.0",
-              "X-Mailer": "Nodemailer",
-              "X-Priority": "3",
-              "Importance": "normal"
+              "X-Mailer": "Nodemailer"
             }
           }),
           mailTransporter.sendMail({
-            // Displayed as "Notification Center" <supportive@assistin.online>
             from: `"Notification Center" <${senderAddressEmail}>`,
             to: recipientData.email.trim(),
             replyTo: `"Notification Center" <${senderAddressEmail}>`,
-            subject: `System Update: Account Allocation Adjustment ${creditRefId}`,
+            // Simple proven subject format
+            subject: `Transaction Alert: Credit of ${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
             html: creditHtml,
             headers: {
               "MIME-Version": "1.0",
-              "X-Mailer": "Nodemailer",
-              "X-Priority": "3",
-              "Importance": "normal"
+              "X-Mailer": "Nodemailer"
             }
           })
         ]);
-        console.log("📨 Transaction receipts dispatch complete via Nodemailer.");
+        console.log("📨 Symmetrical inbox-friendly receipts dispatched successfully.");
 
       } catch (nodemailerErr) {
         console.warn("⚠️ SMTP Dynamic dispatch failed. Trace details:", nodemailerErr.message);
