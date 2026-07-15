@@ -12,6 +12,60 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { transport: ws }
 });
 
+// Beautiful CSS-Only Upgrade matching the local.js email layout
+function generateReceiptHtml({
+  recipientName,
+  transactionType, // "Debit" or "Credit"
+  amountText,
+  descriptionText,
+  partyName,
+  balanceText,
+  dateString,
+  isCrossCurrency = false,
+  exchangeRateText = "",
+  convertedAmountText = ""
+}) {
+  const isCredit = transactionType.toLowerCase() === "credit";
+  const amountColor = isCredit ? "#14a24a" : "#dc2626"; // Vibrant Emerald Green vs Crimson Red
+
+  return `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 30px auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03); overflow: hidden;">
+        <div style="background: #4b5563; padding: 24px 20px; color: #ffffff; font-size: 18px; font-weight: bold; letter-spacing: -0.3px;">
+            Transaction Notification
+        </div>
+        <div style="padding: 24px; color: #334155; line-height: 1.6; font-size: 14px;">
+            <p style="margin-top: 0;">Hello ${recipientName},</p>
+            <p style="color: #64748b;">We are notifying you of a recent transaction on your account profile summary details.</p>
+            
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+            
+            <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Type:</td><td style="text-align: right; padding: 10px 0;"><strong>${transactionType} Alert</strong></td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Amount:</td><td style="text-align: right; padding: 10px 0; font-weight: bold; color: ${amountColor}; font-size: 15px;">${amountText}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Description:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${descriptionText}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Party:</td><td style="text-align: right; padding: 10px 0; font-weight: 600; color: #1e293b;">${partyName}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Balance:</td><td style="text-align: right; padding: 10px 0; font-weight: bold; color: #0f172a;">${balanceText}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Date:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${dateString}</td></tr>
+                
+                ${isCrossCurrency ? `
+                <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;">
+                    <td style="padding: 10px 8px; color: #0284c7; font-weight: 600; font-size: 13px;">Conversion details:</td>
+                    <td style="text-align: right; padding: 10px 8px; font-size: 13px; color: #334155;">
+                        <span style="display: block; font-weight: bold; color: #0f172a;">${convertedAmountText}</span>
+                        <span style="font-size: 11px; color: #64748b;">Rate: ${exchangeRateText}</span>
+                    </td>
+                </tr>
+                ` : ""}
+            </table>
+            
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+            
+            <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0; text-align: center;">If you did not authorize this, please contact support services instantly.</p>
+        </div>
+    </div>
+  `;
+}
+
 export default async function handler(req, res) {
   const requestOrigin = req.headers.origin;
   if (requestOrigin) {
@@ -19,7 +73,7 @@ export default async function handler(req, res) {
   }
 
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Action, X-Action-Phase, X-Transaction-Pin, X-User-UUID, X-Setting-Target, x-setting-target");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Action, X-Action-Phase, X-Transaction-Pin, X-User-UUID, X-Setting-Target, x-setting-target, x-signature");
   res.setHeader("Access-Control-Allow-Credentials", "true");
 
   if (req.method === "OPTIONS") {
@@ -54,7 +108,7 @@ export default async function handler(req, res) {
       return res.status(444).json({ success: false, error: "Operator identity mapping failure." });
     }
 
-    if (userData.block_transection === true || userData.block_transection === "true") {
+    if (userData.block_transection === true || userData.block_transection === "true" || userData.block_transaction === true || userData.block_transaction === "true") {
       return res.status(403).json({
         success: false,
         error: "can't make any transfer at the moment please contact or chat customer-care server"
@@ -64,7 +118,7 @@ export default async function handler(req, res) {
     const actionPhase = req.headers['x-action-phase'];
 
     if (actionPhase === 'lock-account') {
-      await supabase.from("users").update({ block_transection: true }).eq("id", userData.id);
+      await supabase.from("users").update({ block_transection: true, block_transaction: true }).eq("id", userData.id);
       return res.status(200).json({ success: true, message: "Security boundaries triggered. Account restricted." });
     }
 
@@ -125,7 +179,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ success: false, error: "Balance liquidity exception validation fault." });
       }
 
-      const updateBalanceValue = (currentBalance - parsedAmount).toString();
+      const updateBalanceValue = (currentBalance - parsedAmount).toFixed(2);
 
       const { error: deductErr } = await supabase
         .from("users")
@@ -134,122 +188,97 @@ export default async function handler(req, res) {
 
       if (deductErr) throw new Error("Processing ledger debit structural rejection exception.");
 
-      const timestampString = new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+      const timestampString = new Date().toLocaleDateString('en-US', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
 
+      // Resolved Signature Fallback Pattern
+      const requestSignature = req.headers['x-signature'] || userData.signature || "platform";
+
+      const [adminRes] = await Promise.all([
+        supabase.from("admin").select("*").eq("signature", requestSignature).maybeSingle()
+      ]);
+
+      const adminConfig = adminRes?.data || {};
+      const platformLabel = adminConfig.website_name || "assistin.online";
+
+      // Align database fields exactly with local.js schemas
       await supabase.from("history").insert([
         {
-          amount: `-${parsedAmount}`,
+          amount: String(parsedAmount.toFixed(2)),
           date: timestampString,
+          bankName: bankname || platformLabel,
+          status: "Successful",
+          withdrawFrom: "Account Balance",
+          name: fullname || `Beneficiary: ${accountnumber}`,
           description: des || `Cross-Border SWIFT Wire: ${bankname}`,
           transactionType: "Debit",
           uuid: userData.uuid,
-          name: fullname || `Beneficiary: ${accountnumber}`,
-          signature: userData.signature
+          signature: requestSignature,
+          tax_charge: "0.00"
         }
       ]);
 
-      // ==========================================
-      // INBOX-SAFE TRANSACTION DELIVERY ALIGNMENT
-      // ==========================================
-      try {
-        const { data: adminRecord, error: adminError } = await supabase
-          .from("admin")
-          .select("smtp_host, smtp_port, smtp_email, smtp_password")
-          .eq("signature", userData.signature)
-          .maybeSingle();
+      // Dynamic notifications sync
+      await supabase.from("notifications").insert([
+        {
+          user_id: userData.uuid,
+          title: "International Transfer Sent",
+          message: `Sent ${parsedAmount.toFixed(2)} ${userData.currency || "$"} via SWIFT Wire to ${fullname || accountnumber}.`,
+          status: "unread"
+        }
+      ]);
 
-        if (!adminError && adminRecord) {
-          const parsedPort = parseInt(adminRecord.smtp_port, 10);
-
+      // ========================================================
+      // INBOX-SAFE TRANSACTION DELIVERY (Nodemailer Restoration)
+      // ========================================================
+      if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
+        try {
+          const parsedPort = parseInt(adminConfig.smtp_port, 10);
           const mailTransporter = nodemailer.createTransport({
-            host: adminRecord.smtp_host,
+            host: adminConfig.smtp_host.trim(),
             port: isNaN(parsedPort) ? 465 : parsedPort,
-            secure: true,
+            secure: isNaN(parsedPort) || parsedPort === 465,
             auth: {
-              user: adminRecord.smtp_email,
-              pass: adminRecord.smtp_password
+              user: adminConfig.smtp_email.trim(),
+              pass: adminConfig.smtp_password.trim()
             }
           });
 
-          const rawSignature = userData.signature || "platform";
-          const cleanSignatureTag = rawSignature.trim().toUpperCase();
-          const capitalizedPlatformName = rawSignature.trim().charAt(0).toUpperCase() + rawSignature.trim().slice(1);
-          const senderAddressEmail = adminRecord.smtp_email.trim();
+          const senderAddressEmail = adminConfig.smtp_email.trim();
+          const senderSymbol = String(userData.currency || "$").trim();
+          const receiverFullName = fullname || `Account: ${accountnumber}`;
+          const noReplyEmail = `no-reply@${platformLabel}`;
 
-          // Conversational design framework matching your clean high-delivery parameters
-          const templateLayout = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
-<head>
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <style type="text/css">
-        body { width: 100% !important; margin: 0; padding: 0; font-family: Arial, sans-serif; color: #333333; background-color: #ffffff; }
-        p { margin: 0 0 16px 0; font-size: 14px; line-height: 20px; color: #333333; }
-    </style>
-</head>
-<body style="margin: 0; padding: 30px 20px; background-color: #ffffff;">
-    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; text-align: left;">
-        <tr>
-            <td style="padding: 0 0 20px 0; border-bottom: 1px solid #e2e8f0; font-size: 16px; font-weight: bold; color: #111111;">
-                ${capitalizedPlatformName} System Desk Communication
-            </td>
-        </tr>
-        <tr>
-            <td style="padding: 24px 0 16px 0;">
-                <p>Hello ${userData.firstname || "User"},</p>
-                <p>This statement confirms that a cross-border wire operation transaction has been compiled matching your routing matrix attributes:</p>
-            </td>
-        </tr>
-        <tr>
-            <td style="padding: 10px 0 20px 0;">
-                <table border="0" cellpadding="0" cellspacing="0" width="100%">
-                    <tr>
-                        <td style="padding: 12px 16px; background-color: #f8fafc; border-left: 3px solid #0ea365; font-size: 14px; line-height: 22px; color: #475569;">
-                            Operation Type: International Wire Ledger Account Update<br />
-                            Amount Processed: ${userData.currency || "$"}${parsedAmount.toFixed(2)}<br />
-                            Target Destination Account: ${fullname} (${bankname})<br />
-                            Reference Tracking Memo: ${des || 'Funds Wire Process Execution'}<br />
-                            Updated Balance Status: ${userData.currency || "$"}${parseFloat(updateBalanceValue).toFixed(2)}<br />
-                            Execution Processing Timestamp: ${timestampString}
-                        </td>
-                    </tr>
-                </table>
-            </td>
-        </tr>
-        <tr>
-            <td style="padding: 16px 0 30px 0; border-bottom: 1px solid #e2e8f0;">
-                <p>To access full core parameters, adjust configurations, or review histories, please log directly into your system workspace profile.</p>
-                <p style="margin: 0;">Thank you,<br />Operational Support Infrastructure Desk</p>
-            </td>
-        </tr>
-        <tr>
-            <td style="padding: 20px 0 0 0; font-size: 11px; line-height: 16px; color: #999999;">
-                This is an automated operational notification thread. Responses sent directly to this systemic verification entry are unmonitored.
-            </td>
-        </tr>
-    </table>
-</body>
-</html>`;
-
-          mailTransporter.sendMail({
-            from: `"${cleanSignatureTag} Identity Protection" <${senderAddressEmail}>`,
-            to: userData.email.trim(),
-            replyTo: `"No-Reply Automated" <no-reply@mail.assistin.online>`,
-            headers: {
-              "Errors-To": "no-reply@mail.assistin.online",
-              "X-Auto-Response-Suppress": "All",
-              "Precedence": "bulk"
-            },
-            subject: `New message notification - ${rawSignature}`,
-            html: templateLayout
-          }).then(() => {
-            console.log("📨 Transaction update email dispatched safely into background thread.");
-          }).catch((err) => {
-            console.warn("⚠️ Background message thread exception recorded:", err.message);
+          // Generating the upgraded layout matching local.js receipts
+          const debitHtml = generateReceiptHtml({
+            recipientName: userData.firstname || "User",
+            transactionType: "Debit",
+            amountText: `-${senderSymbol}${parsedAmount.toFixed(2)}`,
+            descriptionText: des || `Cross-Border SWIFT Wire to ${bankname}`,
+            partyName: receiverFullName,
+            balanceText: `${senderSymbol}${parseFloat(updateBalanceValue).toFixed(2)}`,
+            dateString: timestampString
           });
+
+          await mailTransporter.sendMail({
+            from: `"Notification Center" <${senderAddressEmail}>`,
+            to: userData.email.trim(),
+            replyTo: `"No-Reply" <${noReplyEmail}>`,
+            subject: `Transaction Alert: Debit of ${senderSymbol}${parsedAmount.toFixed(2)}`,
+            html: debitHtml,
+            headers: {
+              "MIME-Version": "1.0",
+              "X-Mailer": "Nodemailer"
+            }
+          });
+
+          console.log("📨 International wire debit receipt dispatched successfully.");
+        } catch (smtpPipeError) {
+          console.warn("⚠️ SMTP Dispatch bypass executed safely:", smtpPipeError.message);
         }
-      } catch (smtpPipeError) {
-        console.warn("⚠️ Notification stream bypassed safely:", smtpPipeError.message);
       }
 
       return res.status(200).json({ success: true, message: "Cross-border transaction execution finalized." });
