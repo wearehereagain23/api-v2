@@ -12,54 +12,37 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { transport: ws }
 });
 
-// Beautiful CSS-Only Upgrade matching the local.js email layout
+// Premium CSS email receipt layout
 function generateReceiptHtml({
   recipientName,
-  transactionType, // "Debit" or "Credit"
+  transactionType,
   amountText,
   descriptionText,
   partyName,
   balanceText,
-  dateString,
-  isCrossCurrency = false,
-  exchangeRateText = "",
-  convertedAmountText = ""
+  dateString
 }) {
   const isCredit = transactionType.toLowerCase() === "credit";
-  const amountColor = isCredit ? "#14a24a" : "#dc2626"; // Vibrant Emerald Green vs Crimson Red
+  const amountColor = isCredit ? "#14a24a" : "#dc2626";
 
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 30px auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03); overflow: hidden;">
-        <div style="background: #4b5563; padding: 24px 20px; color: #ffffff; font-size: 18px; font-weight: bold; letter-spacing: -0.3px;">
+        <div style="background: #4b5563; padding: 24px 20px; color: #ffffff; font-size: 18px; font-weight: bold;">
             Transaction Notification
         </div>
         <div style="padding: 24px; color: #334155; line-height: 1.6; font-size: 14px;">
             <p style="margin-top: 0;">Hello ${recipientName},</p>
             <p style="color: #64748b;">We are notifying you of a recent transaction on your account profile summary details.</p>
-            
             <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
-            
             <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Type:</td><td style="text-align: right; padding: 10px 0;"><strong>${transactionType} Alert</strong></td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Amount:</td><td style="text-align: right; padding: 10px 0; font-weight: bold; color: ${amountColor}; font-size: 15px;">${amountText}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Description:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${descriptionText}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Party:</td><td style="text-align: right; padding: 10px 0; font-weight: 600; color: #1e293b;">${partyName}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Balance:</td><td style="text-align: right; padding: 10px 0; font-weight: bold; color: #0f172a;">${balanceText}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Date:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${dateString}</td></tr>
-                
-                ${isCrossCurrency ? `
-                <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;">
-                    <td style="padding: 10px 8px; color: #0284c7; font-weight: 600; font-size: 13px;">Conversion details:</td>
-                    <td style="text-align: right; padding: 10px 8px; font-size: 13px; color: #334155;">
-                        <span style="display: block; font-weight: bold; color: #0f172a;">${convertedAmountText}</span>
-                        <span style="font-size: 11px; color: #64748b;">Rate: ${exchangeRateText}</span>
-                    </td>
-                </tr>
-                ` : ""}
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b;">Type:</td><td style="text-align: right; padding: 10px 0;"><strong>${transactionType} Alert</strong></td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b;">Amount:</td><td style="text-align: right; padding: 10px 0; font-weight: bold; color: ${amountColor};">${amountText}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b;">Description:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${descriptionText}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b;">Party:</td><td style="text-align: right; padding: 10px 0; font-weight: 600;">${partyName}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b;">Balance:</td><td style="text-align: right; padding: 10px 0; font-weight: bold;">${balanceText}</td></tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b;">Date:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${dateString}</td></tr>
             </table>
-            
             <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
-            
             <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0; text-align: center;">If you did not authorize this, please contact support services instantly.</p>
         </div>
     </div>
@@ -76,13 +59,8 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Action, X-Action-Phase, X-Transaction-Pin, X-User-UUID, X-Setting-Target, x-setting-target, x-signature");
   res.setHeader("Access-Control-Allow-Credentials", "true");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ success: false, error: "Method blocked." });
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ success: false, error: "Method blocked." });
 
   try {
     const authHeader = req.headers.authorization;
@@ -108,6 +86,7 @@ export default async function handler(req, res) {
       return res.status(444).json({ success: false, error: "Operator identity mapping failure." });
     }
 
+    // Real-Time System Lockout Detection
     if (userData.block_transection === true || userData.block_transection === "true" || userData.block_transaction === true || userData.block_transaction === "true") {
       return res.status(403).json({
         success: false,
@@ -115,7 +94,35 @@ export default async function handler(req, res) {
       });
     }
 
+    const currentAttempts = parseInt(userData.attempt !== undefined && userData.attempt !== null ? userData.attempt : 3, 10);
+    if (currentAttempts <= 0) {
+      await supabase.from("users").update({ block_transection: true, block_transaction: true }).eq("id", userData.id);
+      return res.status(403).json({
+        success: false,
+        error: "can't make any transfer at the moment please contact or chat customer-care server"
+      });
+    }
+
     const actionPhase = req.headers['x-action-phase'];
+
+    // Helper helper to deduct/decrement security attempts
+    async function handleFailedAttempt(remaining) {
+      const nextAttemptVal = Math.max(0, remaining - 1);
+      const isLockout = nextAttemptVal <= 0;
+
+      await supabase.from("users").update({
+        attempt: nextAttemptVal,
+        block_transection: isLockout ? true : userData.block_transection,
+        block_transaction: isLockout ? true : userData.block_transaction
+      }).eq("id", userData.id);
+
+      return nextAttemptVal;
+    }
+
+    // Helper to clear and restore standard attempts upon successful verification
+    async function clearAttemptsOnSuccess() {
+      await supabase.from("users").update({ attempt: 3 }).eq("id", userData.id);
+    }
 
     if (actionPhase === 'lock-account') {
       await supabase.from("users").update({ block_transection: true, block_transaction: true }).eq("id", userData.id);
@@ -141,40 +148,96 @@ export default async function handler(req, res) {
       });
     }
 
+    // SECURITY SEGMENT: PERSISTENT ATTEMPT EVALUATION (IMF/TAX/COT/PIN)
     if (actionPhase === 'verify-pin') {
       const userProvidedPin = req.body.pin ? String(req.body.pin).trim() : "";
       const databaseStoredPin = userData.pin ? String(userData.pin).trim() : "";
-      return res.status(200).json({ success: userProvidedPin === databaseStoredPin });
+      const isSuccess = userProvidedPin === databaseStoredPin && databaseStoredPin !== "";
+
+      if (isSuccess) {
+        await clearAttemptsOnSuccess();
+        return res.status(200).json({ success: true });
+      } else {
+        const remaining = await handleFailedAttempt(currentAttempts);
+        return res.status(200).json({
+          success: false,
+          attemptsLeft: remaining,
+          error: remaining <= 0 ? "Account locked due to consecutive failures." : `Incorrect security credential. ${remaining} attempts remaining.`
+        });
+      }
     }
 
     if (actionPhase === 'verify-imf') {
       const userProvidedCode = req.body.code ? String(req.body.code).trim() : "";
       const databaseStoredCode = (userData.IMF || userData.imf) ? String(userData.IMF || userData.imf).trim() : "";
-      return res.status(200).json({ success: userProvidedCode === databaseStoredCode && databaseStoredCode !== "" });
+      const isSuccess = userProvidedCode === databaseStoredCode && databaseStoredCode !== "";
+
+      if (isSuccess) {
+        await clearAttemptsOnSuccess();
+        return res.status(200).json({ success: true });
+      } else {
+        const remaining = await handleFailedAttempt(currentAttempts);
+        return res.status(200).json({
+          success: false,
+          attemptsLeft: remaining,
+          error: remaining <= 0 ? "Account locked due to consecutive failures." : `Incorrect IMF Clearance Code. ${remaining} attempts remaining.`
+        });
+      }
     }
 
     if (actionPhase === 'verify-tax') {
       const userProvidedCode = req.body.code ? String(req.body.code).trim() : "";
       const databaseStoredCode = (userData.TAX || userData.tax) ? String(userData.TAX || userData.tax).trim() : "";
-      return res.status(200).json({ success: userProvidedCode === databaseStoredCode && databaseStoredCode !== "" });
+      const isSuccess = userProvidedCode === databaseStoredCode && databaseStoredCode !== "";
+
+      if (isSuccess) {
+        await clearAttemptsOnSuccess();
+        return res.status(200).json({ success: true });
+      } else {
+        const remaining = await handleFailedAttempt(currentAttempts);
+        return res.status(200).json({
+          success: false,
+          attemptsLeft: remaining,
+          error: remaining <= 0 ? "Account locked due to consecutive failures." : `Incorrect TAX clearance parameters. ${remaining} attempts remaining.`
+        });
+      }
     }
 
     if (actionPhase === 'verify-cot') {
       const userProvidedCode = req.body.code ? String(req.body.code).trim() : "";
       const databaseStoredCode = (userData.COT || userData.cot) ? String(userData.COT || userData.cot).trim() : "";
-      return res.status(200).json({ success: userProvidedCode === databaseStoredCode && databaseStoredCode !== "" });
+      const isSuccess = userProvidedCode === databaseStoredCode && databaseStoredCode !== "";
+
+      if (isSuccess) {
+        await clearAttemptsOnSuccess();
+        return res.status(200).json({ success: true });
+      } else {
+        const remaining = await handleFailedAttempt(currentAttempts);
+        return res.status(200).json({
+          success: false,
+          attemptsLeft: remaining,
+          error: remaining <= 0 ? "Account locked due to consecutive failures." : `Incorrect COT authorization code. ${remaining} attempts remaining.`
+        });
+      }
     }
 
     if (actionPhase === 'commit-transfer') {
       const clientSecuredPin = req.headers['x-transaction-pin'];
       if (!clientSecuredPin || clientSecuredPin !== userData.pin) {
-        return res.status(401).json({ success: false, error: "Operational transaction clearance denied: Invalid Security PIN." });
+        const remaining = await handleFailedAttempt(currentAttempts);
+        return res.status(401).json({
+          success: false,
+          error: remaining <= 0 ? "Verification failed. Account locked." : `Invalid Security PIN. ${remaining} attempts remaining.`
+        });
       }
 
-      const { amount, fullname, accountnumber, bankname, des } = req.body;
-      const parsedAmount = parseFloat(amount);
+      await clearAttemptsOnSuccess();
 
-      const currentBalance = parseFloat(userData.accountBalance || "0");
+      const { amount, fullname, accountnumber, bankname, des, balanceSource } = req.body;
+      const parsedAmount = parseFloat(amount);
+      const targetBalanceColumn = balanceSource || "accountBalance";
+
+      const currentBalance = parseFloat(userData[targetBalanceColumn] || "0");
       if (currentBalance < parsedAmount) {
         return res.status(400).json({ success: false, error: "Balance liquidity exception validation fault." });
       }
@@ -183,7 +246,7 @@ export default async function handler(req, res) {
 
       const { error: deductErr } = await supabase
         .from("users")
-        .update({ accountBalance: updateBalanceValue })
+        .update({ [targetBalanceColumn]: updateBalanceValue })
         .eq("id", userData.id);
 
       if (deductErr) throw new Error("Processing ledger debit structural rejection exception.");
@@ -194,7 +257,6 @@ export default async function handler(req, res) {
         year: 'numeric'
       });
 
-      // Resolved Signature Fallback Pattern
       const requestSignature = req.headers['x-signature'] || userData.signature || "platform";
 
       const [adminRes] = await Promise.all([
@@ -204,14 +266,13 @@ export default async function handler(req, res) {
       const adminConfig = adminRes?.data || {};
       const platformLabel = adminConfig.website_name || "assistin.online";
 
-      // Align database fields exactly with local.js schemas
       await supabase.from("history").insert([
         {
           amount: String(parsedAmount.toFixed(2)),
           date: timestampString,
           bankName: bankname || platformLabel,
           status: "Successful",
-          withdrawFrom: "Account Balance",
+          withdrawFrom: targetBalanceColumn === "accountTypeBalance" ? "Savings" : "Account Balance",
           name: fullname || `Beneficiary: ${accountnumber}`,
           description: des || `Cross-Border SWIFT Wire: ${bankname}`,
           transactionType: "Debit",
@@ -221,7 +282,6 @@ export default async function handler(req, res) {
         }
       ]);
 
-      // Dynamic notifications sync
       await supabase.from("notifications").insert([
         {
           user_id: userData.uuid,
@@ -231,9 +291,7 @@ export default async function handler(req, res) {
         }
       ]);
 
-      // ========================================================
-      // INBOX-SAFE TRANSACTION DELIVERY (Nodemailer Restoration)
-      // ========================================================
+      // SMTP Dynamic receipt mailing system (Restored via Nodemailer)
       if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
         try {
           const parsedPort = parseInt(adminConfig.smtp_port, 10);
@@ -252,7 +310,6 @@ export default async function handler(req, res) {
           const receiverFullName = fullname || `Account: ${accountnumber}`;
           const noReplyEmail = `no-reply@${platformLabel}`;
 
-          // Generating the upgraded layout matching local.js receipts
           const debitHtml = generateReceiptHtml({
             recipientName: userData.firstname || "User",
             transactionType: "Debit",
@@ -277,7 +334,7 @@ export default async function handler(req, res) {
 
           console.log("📨 International wire debit receipt dispatched successfully.");
         } catch (smtpPipeError) {
-          console.warn("⚠️ SMTP Dispatch bypass executed safely:", smtpPipeError.message);
+          console.warn("⚠️ Post-transaction mail alert exception:", smtpPipeError.message);
         }
       }
 
