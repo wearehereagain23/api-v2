@@ -1,13 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 import jwt from "jsonwebtoken";
-import { Resend } from "resend";
+import nodemailer from "nodemailer"; // Back to Nodemailer!
 import ws from "ws";
 import { getIsoCode } from "./currency.js";
 
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const JWT_SECRET = process.env.JWT_SECRET;
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -45,6 +44,7 @@ function generateReceiptHtml({
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; padding: 40px 16px; margin: 0;">
       <div style="max-width: 540px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.03), 0 4px 6px -4px rgba(0,0,0,0.03);">
         
+        <!-- Modern Subtle Gradient Header Accent -->
         <div style="background: linear-gradient(135deg, #475569 0%, #1e293b 100%); padding: 32px 24px; text-align: center; color: #ffffff;">
           <h2 style="margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; color: #ffffff;">${brandName}</h2>
           <p style="margin: 6px 0 0 0; font-size: 13px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;">System Notification</p>
@@ -52,6 +52,7 @@ function generateReceiptHtml({
 
         <div style="padding: 36px 32px;">
           
+          <!-- Large Clean Hero Amount Block -->
           <div style="text-align: center; margin-bottom: 32px;">
             <p style="margin: 0; font-size: 13px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
               ${isDebit ? 'Total Allocation Out' : 'Net Funds Deposited'}
@@ -64,6 +65,7 @@ function generateReceiptHtml({
             </div>
           </div>
 
+          <!-- Transaction Data Grid -->
           <div style="border-top: 1px solid #f1f5f9; padding-top: 24px; margin-bottom: 24px;">
             <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
               <tr style="height: 38px;">
@@ -83,6 +85,7 @@ function generateReceiptHtml({
                 <td style="text-align: right; color: #0f172a; font-weight: 500;">${accountSourceLabel}</td>
               </tr>
 
+              <!-- Dynamic Multi-Currency UI Block (Only displays when cross-currency conversions occur) -->
               ${isCrossCurrency ? `
               <tr style="height: 12px;"><td colspan="2"></td></tr>
               <tr style="border-top: 1px dashed #e2e8f0; height: 12px;"><td colspan="2"></td></tr>
@@ -98,6 +101,7 @@ function generateReceiptHtml({
             </table>
           </div>
 
+          <!-- Dynamic Financial Impact Summary Card -->
           <div style="background-color: #f8fafc; border-radius: 12px; padding: 20px; border: 1px solid #f1f5f9;">
             <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
               <tr style="height: 28px;">
@@ -115,6 +119,7 @@ function generateReceiptHtml({
             </table>
           </div>
 
+          <!-- Ultra-clean security footer -->
           <div style="text-align: center; margin-top: 32px;">
             <p style="margin: 0; font-size: 11px; color: #94a3b8; line-height: 1.5;">
               Authorized transaction update. If unauthorized, please secure your profile summary settings.
@@ -123,6 +128,7 @@ function generateReceiptHtml({
 
         </div>
 
+        <!-- Clean Footer -->
         <div style="background-color: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8;">
           <p style="margin: 0 0 2px 0;">This is an automatic notification pipeline. Replies to this address are not monitored.</p>
           <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${brandName}. All rights reserved.</p>
@@ -158,7 +164,12 @@ export default async function handler(req, res) {
       return res.status(401).json({ success: false, error: "Unauthorized Identity verification." });
     }
 
-    const { accountNumber, amount, balanceSource, signature, isPreview } = req.body;
+    const { accountNumber, amount, balanceSource, signature, isPreview, action } = req.body;
+
+    if (action === "send_debit_email") {
+      return res.status(200).json({ success: true, message: "Emails already handled inside transaction lifecycle." });
+    }
+
     const baseAmount = parseFloat(amount) || 0;
 
     if (!accountNumber || baseAmount <= 0 || !balanceSource || !signature) {
@@ -322,21 +333,27 @@ export default async function handler(req, res) {
     ]);
 
     // ========================================================
-    // RESEND EMAIL ENGINE: SEND DEBIT AND CREDIT SIMULTANEOUSLY
+    // SMTP BROADCAST (Nodemailer Engine)
     // ========================================================
-    if (RESEND_API_KEY) {
+    if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
       try {
-        const resendInstance = new Resend(RESEND_API_KEY);
+        const mailTransporter = nodemailer.createTransport({
+          host: adminConfig.smtp_host.trim(),
+          port: parseInt(adminConfig.smtp_port, 10) || 465,
+          secure: parseInt(adminConfig.smtp_port, 10) === 465,
+          auth: {
+            user: adminConfig.smtp_email.trim(),
+            pass: adminConfig.smtp_password.trim()
+          }
+        });
+
+        const senderAddressEmail = adminConfig.smtp_email.trim();
         const cleanSignatureTag = platformLabel;
 
         const debitRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-D`;
         const creditRefId = `TXN-${Math.floor(100000 + Math.random() * 900000)}-C`;
 
-        // Aligned sender address logic: "Notification Center" <supportive@assistin.online>
-        const senderAddressEmail = "supportive@assistin.online";
-        const fromEmailAddress = `"Notification Center" <${senderAddressEmail}>`;
-
-        // 1. Prepare Debit Receipt for Sender
+        // Generate Debit Email Content
         const debitHtml = generateReceiptHtml({
           brandName: cleanSignatureTag,
           recipientName: receiverFullName,
@@ -348,13 +365,13 @@ export default async function handler(req, res) {
           dateString: formattedDateString,
           referenceId: debitRefId,
           accountSourceLabel: uiWithdrawLabel,
-          // Exchange Rate properties
+          // Conversion conditional styling
           isCrossCurrency: !currenciesMatch,
           exchangeRateText: currenciesMatch ? "" : `1 ${senderSymbol} = ${computationalExchangeRate.toFixed(4)} ${recipientSymbol}`,
           convertedAmountText: currenciesMatch ? "" : `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`
         });
 
-        // 2. Prepare Credit Receipt for Recipient
+        // Generate Credit Email Content
         const creditHtml = generateReceiptHtml({
           brandName: cleanSignatureTag,
           recipientName: receiverFullName,
@@ -366,59 +383,41 @@ export default async function handler(req, res) {
           dateString: formattedDateString,
           referenceId: creditRefId,
           accountSourceLabel: "Account Balance",
-          // Exchange Rate properties
+          // Conversion conditional styling
           isCrossCurrency: !currenciesMatch,
           exchangeRateText: currenciesMatch ? "" : `1 ${senderSymbol} = ${computationalExchangeRate.toFixed(4)} ${recipientSymbol}`,
           convertedAmountText: currenciesMatch ? "" : `${senderSymbol}${baseAmount.toFixed(2)}`
         });
 
-        // --- DEBIT EMAIL DISPATCH RUN ---
-        let debitResult = await resendInstance.emails.send({
-          from: fromEmailAddress,
-          to: [senderData.email.trim()],
-          subject: `Transaction Alert: Debit of ${senderSymbol}${baseAmount.toFixed(2)}`,
-          html: debitHtml
-        });
+        await Promise.all([
+          mailTransporter.sendMail({
+            from: `"Notification Center" <${senderAddressEmail}>`,
+            to: senderData.email.trim(),
+            replyTo: `"Notification Center" <${senderAddressEmail}>`,
+            subject: `Transaction Alert: Debit of ${senderSymbol}${baseAmount.toFixed(2)}`,
+            html: debitHtml,
+            headers: {
+              "MIME-Version": "1.0",
+              "X-Mailer": "Nodemailer"
+            }
+          }),
+          mailTransporter.sendMail({
+            from: `"Notification Center" <${senderAddressEmail}>`,
+            to: recipientData.email.trim(),
+            replyTo: `"Notification Center" <${senderAddressEmail}>`,
+            subject: `Transaction Alert: Credit of ${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
+            html: creditHtml,
+            headers: {
+              "MIME-Version": "1.0",
+              "X-Mailer": "Nodemailer"
+            }
+          })
+        ]);
+        console.log("📨 Premium transactional emails sent successfully via Nodemailer!");
 
-        if (debitResult.error && debitResult.error.statusCode === 403) {
-          console.warn("⚠️ Domain restriction triggered. Falling back to Sandbox Mode.");
-          debitResult = await resendInstance.emails.send({
-            from: "onboarding@resend.dev",
-            to: ["supportive@assistin.online"],
-            subject: `[SANDBOX] Transaction Alert: Debit of ${senderSymbol}${baseAmount.toFixed(2)}`,
-            html: debitHtml
-          });
-        }
-
-        // --- CREDIT EMAIL DISPATCH RUN ---
-        let creditResult = await resendInstance.emails.send({
-          from: fromEmailAddress,
-          to: [recipientData.email.trim()],
-          subject: `Transaction Alert: Credit of ${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
-          html: creditHtml
-        });
-
-        if (creditResult.error && creditResult.error.statusCode === 403) {
-          console.warn("⚠️ Domain restriction triggered. Falling back to Sandbox Mode.");
-          creditResult = await resendInstance.emails.send({
-            from: "onboarding@resend.dev",
-            to: ["supportive@assistin.online"],
-            subject: `[SANDBOX] Transaction Alert: Credit of ${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
-            html: creditHtml
-          });
-        }
-
-        if (debitResult.error) console.error("❌ Resend Debit Email Error:", debitResult.error);
-        else console.log(`📨 Premium Debit receipt dispatched. ID: ${debitResult.data.id}`);
-
-        if (creditResult.error) console.error("❌ Resend Credit Email Error:", creditResult.error);
-        else console.log(`📨 Premium Credit receipt dispatched. ID: ${creditResult.data.id}`);
-
-      } catch (resendErr) {
-        console.error("❌ Resend Execution Exception:", resendErr);
+      } catch (nodemailerErr) {
+        console.warn("⚠️ SMTP Dynamic dispatch failed. Trace details:", nodemailerErr.message);
       }
-    } else {
-      console.warn("⚠️ Transaction completed but RESEND_API_KEY is not defined.");
     }
 
     return res.status(200).json({ success: true, message: "Ledger clearance transaction executed successfully." });
