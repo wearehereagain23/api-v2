@@ -41,6 +41,7 @@ import notificationSystemHandler from "./bank/notification-system.js";
 import registerUserHandler from "./bank/register-user.js";
 import loginUserHandler from "./bank/login-user.js";
 import adminSettingsHandler from "./bank/admin-settings.js";
+import verifyPinHandler from "./bank/verify-pin.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -183,6 +184,7 @@ app.all("/api/notifications/read", adaptHandler(notificationSystemHandler));
 app.post("/bank/register-user", registerUserHandler);
 app.post("/bank/login-user", loginUserHandler);
 app.all("/api/admin-settings", adaptHandler(adminSettingsHandler));
+app.all("/api/verify-pin", adaptHandler(verifyPinHandler));
 
 // ==========================================
 // 6. HEALTH MONITORS & BOOT STRAPPER

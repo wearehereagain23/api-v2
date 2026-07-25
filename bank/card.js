@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import jwt from "jsonwebtoken";
-import nodemailer from "nodemailer";
 import ws from "ws";
+import nodemailer from "nodemailer"; // Added for email alerts
 
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -14,9 +14,37 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 const executionAntiSpamCache = new Map();
 
+// Helper: Format platform name
 function formatPlatformName(signature) {
     if (!signature || typeof signature !== "string") return "Platform";
-    return signature.trim().charAt(0).toUpperCase() + signature.trim().slice(1);
+    const cleanStr = signature.trim();
+    return cleanStr.charAt(0).toUpperCase() + cleanStr.slice(1);
+}
+
+// Helper: Get Admin SMTP Transporter
+async function getAdminTransporter(signature) {
+    const { data: adminRecord, error } = await supabase
+        .from("admin")
+        .select("smtp_host, smtp_port, smtp_password, smtp_email")
+        .eq("signature", signature)
+        .maybeSingle();
+
+    if (error || !adminRecord) {
+        throw new Error(error ? error.message : `No admin environment found for signature '${signature}'.`);
+    }
+
+    const parsedPort = parseInt(adminRecord.smtp_port, 10);
+    const transporter = nodemailer.createTransport({
+        host: adminRecord.smtp_host,
+        port: isNaN(parsedPort) ? 465 : parsedPort,
+        secure: true,
+        auth: {
+            user: adminRecord.smtp_email,
+            pass: adminRecord.smtp_password
+        }
+    });
+
+    return { transporter, adminEmail: adminRecord.smtp_email };
 }
 
 export default async function handler(req, res) {
@@ -40,172 +68,6 @@ export default async function handler(req, res) {
     const requestPayload = req.body || {};
 
     // ==========================================================================
-    // UNAUTHENTICATED ACTION BYPASS GATEWAYS (FORGOT PASSWORD PIPELINE)
-    // ==========================================================================
-
-    // 1. FORGOT PASSWORD REQUEST
-    if (operationalSettingTarget === "forgot_password_request" && req.method === "POST") {
-        const { email, signature } = requestPayload;
-        if (!email || !signature) {
-            return res.status(400).json({ success: false, error: "Email and signature are required." });
-        }
-
-        const cleanEmail = email.trim().toLowerCase();
-        const dynamicPlatformName = formatPlatformName(signature);
-
-        const { data: adminRecord, error: adminError } = await supabase
-            .from("admin")
-            .select("smtp_host, smtp_port, smtp_password, smtp_email")
-            .eq("signature", signature)
-            .maybeSingle();
-
-        if (adminError || !adminRecord) {
-            return res.status(401).json({ success: false, error: "System configuration error. Please contact support." });
-        }
-
-        const { data: userRecord, error: userError } = await supabase
-            .from("users")
-            .select("uuid, email, restricted, activeuser, firstname")
-            .eq("email", cleanEmail)
-            .eq("signature", signature)
-            .maybeSingle();
-
-        if (userError || !userRecord) {
-            return res.status(404).json({ success: false, error: "No account found with this email address." });
-        }
-
-        if (userRecord.restricted === true) {
-            return res.status(403).json({ success: false, error: "Your account is locked due to security restrictions." });
-        }
-
-        const recoveryOTP = Math.floor(100000 + Math.random() * 900000).toString();
-
-        const { error: updateError } = await supabase
-            .from("users")
-            .update({ otp: parseInt(recoveryOTP, 10), attempt: 0 })
-            .eq("uuid", userRecord.uuid);
-
-        if (updateError) {
-            return res.status(500).json({ success: false, error: "Failed to update verification system." });
-        }
-
-        try {
-            const parsedPort = parseInt(adminRecord.smtp_port, 10);
-            const mailTransporter = nodemailer.createTransport({
-                host: adminRecord.smtp_host,
-                port: isNaN(parsedPort) ? 465 : parsedPort,
-                secure: true,
-                auth: {
-                    user: adminRecord.smtp_email,
-                    pass: adminRecord.smtp_password
-                }
-            });
-
-            mailTransporter.sendMail({
-                from: `"${dynamicPlatformName} Core Security" <${adminRecord.smtp_email}>`,
-                to: userRecord.email,
-                subject: `Password Recovery Code: ${recoveryOTP}`,
-                html: `<h3>Your requested recovery verification code:</h3><br><h1 style="letter-spacing:4px; color:#0a698f;">${recoveryOTP}</h1>`
-            }).catch(err => console.warn("⚠️ SMTP thread fail:", err.message));
-        } catch (mErr) {
-            console.warn("⚠️ Mail system init fault:", mErr.message);
-        }
-
-        return res.status(200).json({ success: true, user_id: userRecord.uuid });
-    }
-
-    // 2. FORGOT PASSWORD VERIFY OTP
-    if ((operationalSettingTarget === "verify_password_otp" || requestPayload.action === "verify_password_otp") && req.method === "POST") {
-        const { user_id, otp } = requestPayload;
-        if (!user_id || !otp) {
-            return res.status(400).json({ success: false, error: "Verification parameters are missing." });
-        }
-
-        const { data: userRecord, error: userError } = await supabase
-            .from("users")
-            .select("uuid, otp, restricted, activeuser, attempt")
-            .eq("uuid", user_id)
-            .maybeSingle();
-
-        if (userError || !userRecord) {
-            return res.status(404).json({ success: false, error: "User account not found." });
-        }
-
-        if (userRecord.restricted === true || userRecord.activeuser === false || (parseInt(userRecord.attempt, 10) >= 5)) {
-            return res.status(403).json({
-                success: false,
-                restricted: true,
-                error: "Account access restricted due to multiple failed verification attempts."
-            });
-        }
-
-        const dbUserOtp = userRecord.otp ? String(userRecord.otp).trim() : "";
-        const inputOtp = String(otp || "").trim();
-
-        if (!dbUserOtp) {
-            return res.status(400).json({ success: false, error: "No active verification code found for this account." });
-        }
-
-        if (dbUserOtp !== inputOtp) {
-            const currentAttempt = (parseInt(userRecord.attempt, 10) || 0) + 1;
-            const remaining = 5 - currentAttempt;
-
-            if (remaining <= 0) {
-                await supabase
-                    .from("users")
-                    .update({ restricted: true, activeuser: false, attempt: 5 })
-                    .eq("uuid", userRecord.uuid);
-
-                return res.status(403).json({
-                    success: false,
-                    restricted: true,
-                    error: "Too many failed attempts. Your account has been restricted."
-                });
-            }
-
-            await supabase
-                .from("users")
-                .update({ attempt: currentAttempt })
-                .eq("uuid", userRecord.uuid);
-
-            return res.status(401).json({
-                success: false,
-                restricted: false,
-                error: `Incorrect verification code. You have ${remaining} attempt(s) remaining.`
-            });
-        }
-
-        await supabase
-            .from("users")
-            .update({ otp: null, attempt: 0, restricted: false, activeuser: true })
-            .eq("uuid", userRecord.uuid);
-
-        return res.status(200).json({ success: true, message: "Verification successful." });
-    }
-
-    // 3. FORGOT PASSWORD COMMIT NEW PASSWORD
-    if ((operationalSettingTarget === "commit_new_password" || requestPayload.action === "commit_new_password") && req.method === "POST") {
-        const { user_id, password } = requestPayload;
-        if (!user_id || !password) {
-            return res.status(400).json({ success: false, error: "Invalid password reset payload." });
-        }
-
-        const { error: patchError } = await supabase
-            .from("users")
-            .update({
-                password: String(password).trim(),
-                attempt: 0,
-                attempt2: 0,
-                restricted: false,
-                activeuser: true
-            })
-            .eq("uuid", user_id);
-
-        if (patchError) return res.status(500).json({ success: false, error: "Database error updating password." });
-        return res.status(200).json({ success: true, message: "Password reset successfully." });
-    }
-
-    // ==========================================================================
     // AUTHENTICATED USER SESSION PIPELINE
     // ==========================================================================
     try {
@@ -222,13 +84,39 @@ export default async function handler(req, res) {
             return res.status(401).json({ success: false, error: "Session expired or invalid. Please log in again." });
         }
 
-        const { data: userData, error: userError } = await supabase
+        // Extract identifier safely across all possible JWT key conventions
+        const userIdentifier = decodedToken.uuid || decodedToken.id || decodedToken.sub || decodedToken.email;
+
+        if (!userIdentifier) {
+            return res.status(401).json({ success: false, error: "Invalid session payload structure." });
+        }
+
+        // Query extended columns (added firstname, lastname, signature, accountNumber) for email notifications
+        let userData = null;
+        const { data: userRecord, error: userError } = await supabase
             .from("users")
-            .select("id, uuid, password, pin, email, activeuser, restricted, attempt, attempt2")
-            .eq("uuid", decodedToken.uuid)
+            .select("id, uuid, pin, email, activeuser, restricted, attempt2, kyc, card_pin, signature, firstname, lastname, accountNumber")
+            .eq("uuid", userIdentifier)
             .maybeSingle();
 
-        if (userError || !userData) {
+        if (userError) {
+            console.error("Supabase user query error:", userError.message);
+        }
+
+        if (userRecord) {
+            userData = userRecord;
+        } else {
+            // Fallback check by email if uuid lookup didn't match
+            const { data: byEmail } = await supabase
+                .from("users")
+                .select("id, uuid, pin, email, activeuser, restricted, attempt2, kyc, card_pin, signature, firstname, lastname, accountNumber")
+                .eq("email", userIdentifier)
+                .maybeSingle();
+
+            userData = byEmail;
+        }
+
+        if (!userData) {
             return res.status(404).json({ success: false, error: "User session account not found." });
         }
 
@@ -249,7 +137,7 @@ export default async function handler(req, res) {
 
         // Anti-spam request throttling (2000ms window)
         const currentExecutionTimestamp = Date.now();
-        const absoluteUserTrackerIdKey = userData.uuid;
+        const absoluteUserTrackerIdKey = userData.uuid || userData.id;
         if (executionAntiSpamCache.has(absoluteUserTrackerIdKey)) {
             const previousLogTime = executionAntiSpamCache.get(absoluteUserTrackerIdKey);
             if (currentExecutionTimestamp - previousLogTime < 2000) {
@@ -261,93 +149,103 @@ export default async function handler(req, res) {
         }
         executionAntiSpamCache.set(absoluteUserTrackerIdKey, currentExecutionTimestamp);
 
+        const actionType = requestPayload.action || operationalSettingTarget;
+
         // -------------------------------------------------------------------------
-        // TARGET ROUTE 1: UPDATE PASSWORD (WITH PERSISTENT ATTEMPT LOGIC)
+        // TARGET ROUTE 1: CARD APPLICATION REQUEST
         // -------------------------------------------------------------------------
-        if (operationalSettingTarget === "password") {
-            const currentPassword = requestPayload.currentPassword || requestPayload.oldPassword;
-            const newPassword = requestPayload.newPassword;
+        if (actionType === "request_card") {
+            const { cardType, pin } = requestPayload;
 
-            if (!currentPassword || !newPassword) {
-                return res.status(400).json({ success: false, error: "Current password and new password are required." });
+            if (!cardType || !pin) {
+                return res.status(400).json({ success: false, error: "Card type and PIN configuration are required." });
             }
 
-            const storedPassword = String(userData.password || "").trim();
-            const inputPassword = String(currentPassword || "").trim();
-
-            if (storedPassword !== inputPassword) {
-                const currentAttempts = (parseInt(userData.attempt, 10) || 0) + 1;
-                const remaining = 5 - currentAttempts;
-
-                if (remaining <= 0) {
-                    await supabase
-                        .from("users")
-                        .update({ restricted: true, activeuser: false, attempt: 5 })
-                        .eq("id", userData.id);
-
-                    return res.status(403).json({
-                        success: false,
-                        restricted: true,
-                        error: "Too many failed password attempts. Account locked."
-                    });
-                }
-
-                await supabase
-                    .from("users")
-                    .update({ attempt: currentAttempts })
-                    .eq("id", userData.id);
-
-                return res.status(400).json({
-                    success: false,
-                    error: `Incorrect current password. You have ${remaining} attempt(s) remaining.`
-                });
+            if (!/^[0-9]{4}$/.test(String(pin).trim())) {
+                return res.status(400).json({ success: false, error: "Card PIN must be exactly 4 digits." });
             }
 
-            if (newPassword.length < 8) {
-                return res.status(400).json({ success: false, error: "New password must be at least 8 characters long." });
-            }
-
-            const { error: passwordDbUpdateErr } = await supabase
+            // Update user record with card details and new PIN
+            const { error: cardApplyErr } = await supabase
                 .from("users")
                 .update({
-                    password: String(newPassword).trim(),
-                    attempt: 0
+                    pin: String(pin).trim(),
+                    card_pin: String(pin).trim(),
+                    cards: String(cardType).toLowerCase(),
+                    cardApproval: "pending",
+                    attempt2: 0
                 })
                 .eq("id", userData.id);
 
-            if (passwordDbUpdateErr) throw new Error("Database error updating password.");
+            if (cardApplyErr) {
+                throw new Error("Failed to process card application.");
+            }
 
-            const updatedUserToken = jwt.sign(
-                { uuid: userData.uuid, email: userData.email },
-                JWT_SECRET,
-                { expiresIn: "7d" }
-            );
+            // MESSAGE USER & ALERT ADMIN
+            try {
+                // 1. Insert an in-app message into the DB for the user to see
+                await supabase.from("messages").insert({
+                    user_id: userData.uuid,
+                    title: "Card Application Received",
+                    message: `We have successfully received your request for a new ${cardType} card. It is currently undergoing review.`,
+                    date: new Date().toISOString(),
+                    read: false
+                });
+
+                // 2. Fetch Admin Transporter
+                const { transporter, adminEmail } = await getAdminTransporter(userData.signature);
+                const platformName = formatPlatformName(userData.signature);
+
+                // 3. Email Alert to Admin
+                await transporter.sendMail({
+                    from: `"${platformName} Alerts" <${adminEmail}>`,
+                    to: adminEmail,
+                    subject: `Pending Card Application: ${userData.firstname} ${userData.lastname}`,
+                    html: `
+                        <h3>New Card Application Alert</h3>
+                        <p><strong>Customer Name:</strong> ${userData.firstname} ${userData.lastname}</p>
+                        <p><strong>Email:</strong> ${userData.email}</p>
+                        <p><strong>Account Number:</strong> ${userData.accountNumber || "N/A"}</p>
+                        <p><strong>Requested Card Type:</strong> ${cardType}</p>
+                        <p><strong>Status:</strong> Pending Approval</p>
+                        <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+                        <p>Please log in to your administrative dashboard to review and process this application.</p>
+                    `
+                });
+
+                // 4. Email Alert to User
+                await transporter.sendMail({
+                    from: `"${platformName} Support" <${adminEmail}>`,
+                    to: userData.email,
+                    subject: `Your ${cardType} Card Application is Pending`,
+                    html: `
+                        <p>Hello ${userData.firstname},</p>
+                        <p>We have successfully received your application for a new <strong>${cardType}</strong> card.</p>
+                        <p>Your request is currently under review by our team. We will notify you via email and your dashboard as soon as it is approved.</p>
+                        <br/>
+                        <p>Thank you for choosing ${platformName}.</p>
+                    `
+                });
+            } catch (notificationErr) {
+                console.warn("⚠️ Notification dispatch failed, but card was requested successfully:", notificationErr.message);
+            }
 
             return res.status(200).json({
                 success: true,
-                message: "Password updated successfully.",
-                token: updatedUserToken
+                message: "Card application submitted successfully."
             });
         }
 
         // -------------------------------------------------------------------------
-        // TARGET ROUTE 2: UPDATE PIN (WITH PERSISTENT ATTEMPT LOGIC)
+        // TARGET ROUTE 2: VERIFY EXISTING PIN
         // -------------------------------------------------------------------------
-        if (operationalSettingTarget === "pin") {
-            const currentPin = requestPayload.currentPin || requestPayload.password;
-            const newPin = requestPayload.newPin || requestPayload.pin;
+        if (actionType === "verify_pin") {
+            const inputPin = String(requestPayload.pin || "").trim();
+            const storedPin = String(userData.pin || userData.card_pin || "").trim();
 
-            if (!currentPin || !newPin) {
-                return res.status(400).json({ success: false, error: "Current authentication key and new PIN are required." });
-            }
-
-            const storedPin = String(userData.pin || "").trim();
-            const storedPassword = String(userData.password || "").trim();
-            const inputAuth = String(currentPin || "").trim();
-
-            if (storedPin !== inputAuth && storedPassword !== inputAuth) {
-                const currentPinAttempts = (parseInt(userData.attempt2, 10) || 0) + 1;
-                const remaining = 5 - currentPinAttempts;
+            if (!storedPin || storedPin !== inputPin) {
+                const currentAttempts = (parseInt(userData.attempt2, 10) || 0) + 1;
+                const remaining = 5 - currentAttempts;
 
                 if (remaining <= 0) {
                     await supabase
@@ -358,42 +256,104 @@ export default async function handler(req, res) {
                     return res.status(403).json({
                         success: false,
                         restricted: true,
-                        error: "Too many failed PIN authorization attempts. Account locked."
+                        error: "Too many failed PIN attempts. Account locked."
                     });
                 }
 
                 await supabase
                     .from("users")
-                    .update({ attempt2: currentPinAttempts })
+                    .update({ attempt2: currentAttempts })
                     .eq("id", userData.id);
 
                 return res.status(400).json({
                     success: false,
-                    error: `Incorrect PIN or authorization password. You have ${remaining} attempt(s) remaining.`
+                    error: `Incorrect PIN code. You have ${remaining} attempt(s) remaining.`
                 });
+            }
+
+            await supabase
+                .from("users")
+                .update({ attempt2: 0 })
+                .eq("id", userData.id);
+
+            return res.status(200).json({
+                success: true,
+                message: "PIN verified successfully."
+            });
+        }
+
+        // -------------------------------------------------------------------------
+        // TARGET ROUTE 3: UPDATE / CONFIGURE PIN
+        // -------------------------------------------------------------------------
+        if (actionType === "pin" || actionType === "update_pin") {
+            const currentPin = requestPayload.currentPin;
+            const newPin = requestPayload.newPin || requestPayload.pin;
+
+            if (!newPin) {
+                return res.status(400).json({ success: false, error: "New PIN parameter is required." });
             }
 
             if (!/^[0-9]{4}$/.test(String(newPin).trim())) {
                 return res.status(400).json({ success: false, error: "New PIN must be exactly 4 digits." });
             }
 
+            const activePin = userData.pin || userData.card_pin;
+            if (activePin && currentPin) {
+                const storedPin = String(activePin || "").trim();
+                const inputAuth = String(currentPin || "").trim();
+
+                if (storedPin !== inputAuth) {
+                    const currentPinAttempts = (parseInt(userData.attempt2, 10) || 0) + 1;
+                    const remaining = 5 - currentPinAttempts;
+
+                    if (remaining <= 0) {
+                        await supabase
+                            .from("users")
+                            .update({ restricted: true, activeuser: false, attempt2: 5 })
+                            .eq("id", userData.id);
+
+                        return res.status(403).json({
+                            success: false,
+                            restricted: true,
+                            error: "Too many failed PIN authorization attempts. Account locked."
+                        });
+                    }
+
+                    await supabase
+                        .from("users")
+                        .update({ attempt2: currentPinAttempts })
+                        .eq("id", userData.id);
+
+                    return res.status(400).json({
+                        success: false,
+                        error: `Incorrect authorization PIN. You have ${remaining} attempt(s) remaining.`
+                    });
+                }
+            }
+
             const { error: pinDbUpdateErr } = await supabase
                 .from("users")
                 .update({
                     pin: String(newPin).trim(),
+                    card_pin: String(newPin).trim(),
                     attempt2: 0
                 })
                 .eq("id", userData.id);
 
-            if (pinDbUpdateErr) throw new Error("Database error updating PIN.");
+            if (pinDbUpdateErr) {
+                throw new Error("Database error updating PIN.");
+            }
 
-            return res.status(200).json({ success: true, message: "PIN updated successfully." });
+            return res.status(200).json({
+                success: true,
+                message: "PIN updated successfully."
+            });
         }
 
         return res.status(400).json({ success: false, error: "Invalid action target specified." });
 
     } catch (err) {
-        console.error("❌ Fatal Error:", err.message);
+        console.error("Fatal Error:", err.message);
         return res.status(500).json({ success: false, error: err.message || "An unexpected error occurred." });
     }
 }

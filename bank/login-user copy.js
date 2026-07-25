@@ -16,6 +16,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     realtime: { transport: ws }
 });
 
+// Cache for storing transient OTP codes in memory (user_id -> { otp, expiresAt })
 const otpStore = new Map();
 
 function formatPlatformName(signature) {
@@ -24,6 +25,7 @@ function formatPlatformName(signature) {
     return cleanStr.charAt(0).toUpperCase() + cleanStr.slice(1);
 }
 
+// Fetch active SMTP Transporter from Admin Record
 async function getAdminTransporter(signature) {
     const { data: adminRecord, error } = await supabase
         .from("admin")
@@ -49,65 +51,7 @@ async function getAdminTransporter(signature) {
     return { transporter, adminEmail: adminRecord.smtp_email };
 }
 
-// Helper function to resolve IP address to Location using ip-api.com
-async function getLocationFromIp(ip) {
-    if (!ip || ip === "Unknown IP" || ip === "127.0.0.1" || ip === "::1") {
-        return "Localhost / Internal Network";
-    }
-
-    try {
-        // Extract the first IP if multiple IPs are present in x-forwarded-for header
-        const cleanIp = ip.split(",")[0].trim();
-        const response = await fetch(`http://ip-api.com/json/${cleanIp}`);
-
-        if (!response.ok) return "Unknown Location";
-
-        const data = await response.json();
-        if (data.status === "success") {
-            return `${data.city || ""}, ${data.regionName || ""}, ${data.country || ""}`.replace(/^, |, $/g, '');
-        }
-    } catch (err) {
-        console.warn("⚠️ Location Lookup Warning:", err.message);
-    }
-
-    return "Unknown Location";
-}
-
-// Helper: Send admin login alert email with device, browser, and country location metadata
-async function sendAdminLoginNotification(req, user, signature, is2FA) {
-    const dynamicPlatformName = formatPlatformName(signature);
-    const { transporter, adminEmail } = await getAdminTransporter(signature);
-
-    // Capture IP address and User-Agent header
-    const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "Unknown IP";
-    const userAgent = req.headers['user-agent'] || "Unknown Device/Browser";
-
-    // Fetch Country and Location from IP
-    const userLocation = await getLocationFromIp(rawIp);
-    const is2FAStatus = is2FA ? "True" : "False";
-
-    const emailSubject = `Login Alert: ${user.firstname} ${user.lastname} Signed In`;
-    const emailBody = `
-        <h3>User Sign-in Notification</h3>
-        <p><strong>Platform:</strong> ${dynamicPlatformName}</p>
-        <p><strong>Name:</strong> ${user.firstname} ${user.lastname}</p>
-        <p><strong>Email:</strong> ${user.email}</p>
-        <p><strong>Account Number:</strong> ${user.accountNumber || "N/A"}</p>
-        <p><strong>2FA Enabled:</strong> ${is2FAStatus}</p>
-        <p><strong>IP Address:</strong> ${rawIp}</p>
-        <p><strong>Location:</strong> ${userLocation}</p>
-        <p><strong>Device / Browser Info:</strong> ${userAgent}</p>
-        <p><strong>Time:</strong> ${new Date().toISOString()}</p>
-    `;
-
-    await transporter.sendMail({
-        from: `"${dynamicPlatformName} Security" <${adminEmail}>`,
-        to: adminEmail,
-        subject: emailSubject,
-        html: emailBody
-    });
-}
-
+// Dispatch OTP Email with Inbox-Friendly No-Reply Template
 async function sendOTPEmail(userEmail, firstname, otpCode, signature, subjectText, introText) {
     const dynamicPlatformName = formatPlatformName(signature);
     const { transporter, adminEmail } = await getAdminTransporter(signature);
@@ -123,6 +67,10 @@ async function sendOTPEmail(userEmail, firstname, otpCode, signature, subjectTex
     <title>${subjectText}</title>
 </head>
 <body style="margin:0; padding:0; background-color:#f4f6f9; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#334155;">
+    <div style="display:none; max-height:0px; overflow:hidden;">
+        Your security code is ${otpCode}.
+    </div>
+    
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f4f6f9; padding:40px 10px;">
         <tr>
             <td align="center">
@@ -132,6 +80,7 @@ async function sendOTPEmail(userEmail, firstname, otpCode, signature, subjectTex
                             <h1 style="margin:0; font-size:20px; font-weight:600; color:#ffffff;">${dynamicPlatformName}</h1>
                         </td>
                     </tr>
+                    
                     <tr>
                         <td style="padding:35px 40px;">
                             <p style="margin:0 0 16px 0; font-size:16px; color:#1e293b;">Hello ${firstname || "Valued Customer"},</p>
@@ -141,7 +90,13 @@ async function sendOTPEmail(userEmail, firstname, otpCode, signature, subjectTex
                                 <span style="font-size:32px; font-weight:700; letter-spacing:6px; color:#0f172a;">${otpCode}</span>
                             </div>
 
-                            <p style="margin:0 0 16px 0; font-size:13px; color:#64748b;">This code will expire in 10 minutes.</p>
+                            <p style="margin:0 0 16px 0; font-size:13px; color:#64748b;">This code will expire in 10 minutes. If you did not request this, please secure your account immediately.</p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <td style="padding:24px 40px; background-color:#f8fafc; border-top:1px solid #e2e8f0; font-size:12px; color:#94a3b8; text-align:center;">
+                            This is an unmonitored automated email. Please do not reply directly to this message.
                         </td>
                     </tr>
                 </table>
@@ -151,17 +106,20 @@ async function sendOTPEmail(userEmail, firstname, otpCode, signature, subjectTex
 </body>
 </html>`;
 
+    const otpText = `Hello ${firstname || "Valued Customer"},\n\n${introText}\n\nYour Verification Code: ${otpCode}\n\nThis code expires in 10 minutes. Do not share this code with anyone.`;
+
     await transporter.sendMail({
         from: `"${dynamicPlatformName} Security" <${adminEmail}>`,
         replyTo: noReplyEmail,
         to: userEmail,
         subject: `${subjectText} - ${dynamicPlatformName}`,
-        text: `Hello ${firstname || "Valued Customer"},\n\n${introText}\n\nCode: ${otpCode}\n\nExpires in 10 minutes.`,
+        text: otpText,
         html: otpHtml
     });
 }
 
 export default async function loginUserHandler(req, res) {
+    // CORS Setup
     const requestOrigin = req.headers.origin;
     if (requestOrigin) {
         res.setHeader("Access-Control-Allow-Origin", requestOrigin);
@@ -181,24 +139,39 @@ export default async function loginUserHandler(req, res) {
     try {
         const { action = "login", email, password, signature, user_id, otp } = req.body;
 
-        // 1. LOGIN
+
+        // =========================================================================
+        // ACTION 1: LOGIN (INITIAL CREDENTIAL CHECK & CONDITIONAL OTP DISPATCH)
+        // =========================================================================
         if (action === "login") {
             if (!email || !password || !signature) {
-                return res.status(400).json({ success: false, error: "Please provide email, password, and signature." });
+                return res.status(400).json({ success: false, error: "Please provide your email, password, and signature." });
             }
 
             const cleanEmail = email.trim().toLowerCase();
 
+            // Fetch user by email and signature
             const { data: user, error: fetchErr } = await supabase
                 .from("users")
                 .select(`
-                    id, uuid, firstname, lastname, email, password, restricted, activeuser, "2fa", "accountNumber", accttype, currency
+                    id, 
+                    uuid, 
+                    firstname, 
+                    lastname, 
+                    email, 
+                    password, 
+                    restricted, 
+                    activeuser, 
+                    "2fa", 
+                    "accountNumber", 
+                    accttype, 
+                    currency
                 `)
                 .eq("email", cleanEmail)
                 .eq("signature", signature)
                 .maybeSingle();
 
-            if (fetchErr || !user || user.password !== password) {
+            if (fetchErr || !user) {
                 return res.status(401).json({ success: false, error: "Invalid email address or password." });
             }
 
@@ -206,15 +179,22 @@ export default async function loginUserHandler(req, res) {
                 return res.status(403).json({ success: false, error: "Your account is currently restricted. Please contact support." });
             }
 
+            if (user.password !== password) {
+                return res.status(401).json({ success: false, error: "Invalid email address or password." });
+            }
+
+            // Check 2FA condition (quotes needed for column "2fa")
             const is2FAEnabled = user["2fa"] === true || user["2fa"] === "true";
 
             if (is2FAEnabled) {
+                // Generate 6-Digit OTP
                 const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
                 otpStore.set(user.uuid, {
                     otp: generatedOtp,
-                    expiresAt: Date.now() + 10 * 60 * 1000
+                    expiresAt: Date.now() + 10 * 60 * 1000 // 10 mins
                 });
 
+                // Dispatch OTP Email
                 try {
                     await sendOTPEmail(
                         user.email,
@@ -235,12 +215,7 @@ export default async function loginUserHandler(req, res) {
                     user_id: user.uuid
                 });
             } else {
-                try {
-                    await sendAdminLoginNotification(req, user, signature, false);
-                } catch (adminMailErr) {
-                    console.warn("⚠️ Admin Notification Email Warning:", adminMailErr.message);
-                }
-
+                // Direct login without OTP requirement
                 const token = jwt.sign(
                     { uuid: user.uuid, email: user.email, signature },
                     JWT_SECRET,
@@ -265,24 +240,34 @@ export default async function loginUserHandler(req, res) {
             }
         }
 
-        // 2. VERIFY LOGIN 2FA OTP
+
+        // =========================================================================
+        // ACTION 2: VERIFY OTP (VERIFY MFA PIN & RETURN SESSION TOKEN)
+        // =========================================================================
         if (action === "verify_otp") {
             if (!user_id || !otp || !signature) {
                 return res.status(400).json({ success: false, error: "Missing verification parameters." });
             }
 
             const storedData = otpStore.get(user_id);
-            if (!storedData || Date.now() > storedData.expiresAt) {
-                if (storedData) otpStore.delete(user_id);
-                return res.status(400).json({ success: false, error: "Verification code has expired or is invalid." });
+
+            if (!storedData) {
+                return res.status(400).json({ success: false, error: "Verification code has expired or is invalid. Please request a new code." });
+            }
+
+            if (Date.now() > storedData.expiresAt) {
+                otpStore.delete(user_id);
+                return res.status(400).json({ success: false, error: "Verification code has expired. Please request a new code." });
             }
 
             if (storedData.otp !== otp.trim()) {
-                return res.status(401).json({ success: false, error: "Incorrect verification code." });
+                return res.status(401).json({ success: false, error: "Incorrect verification code. Please try again." });
             }
 
+            // OTP verified successfully - clear token
             otpStore.delete(user_id);
 
+            // Fetch user record to construct JWT payload
             const { data: user, error: userErr } = await supabase
                 .from("users")
                 .select("uuid, email, firstname, lastname, accountNumber, accttype, currency")
@@ -293,12 +278,7 @@ export default async function loginUserHandler(req, res) {
                 return res.status(404).json({ success: false, error: "User profile not found." });
             }
 
-            try {
-                await sendAdminLoginNotification(req, user, signature, true);
-            } catch (adminMailErr) {
-                console.warn("⚠️ Admin Notification Email Warning:", adminMailErr.message);
-            }
-
+            // Sign JWT Token
             const token = jwt.sign(
                 { uuid: user.uuid, email: user.email, signature },
                 JWT_SECRET,
@@ -321,7 +301,9 @@ export default async function loginUserHandler(req, res) {
             });
         }
 
-        // 3. FORGOT PASSWORD REQUEST
+        // =========================================================================
+        // ACTION 3: FORGOT PASSWORD REQUEST (SEND RECOVERY TOKEN)
+        // =========================================================================
         if (action === "forgot_password_request") {
             if (!email || !signature) {
                 return res.status(400).json({ success: false, error: "Please enter a valid email address." });
@@ -331,17 +313,13 @@ export default async function loginUserHandler(req, res) {
 
             const { data: user } = await supabase
                 .from("users")
-                .select("uuid, firstname, email, restricted")
+                .select("uuid, firstname, email")
                 .eq("email", cleanEmail)
                 .eq("signature", signature)
                 .maybeSingle();
 
             if (!user) {
                 return res.status(404).json({ success: false, error: "No account found associated with this email address." });
-            }
-
-            if (user.restricted) {
-                return res.status(403).json({ success: false, error: "Account access restricted due to security locking conditions." });
             }
 
             const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -357,7 +335,7 @@ export default async function loginUserHandler(req, res) {
                     generatedOtp,
                     signature,
                     "Password Reset Request Code",
-                    "We received a request to reset your account password. Use the code below to proceed:"
+                    "We received a request to reset your account password. Use the code below to proceed with resetting your credentials:"
                 );
             } catch (mailErr) {
                 console.warn("⚠️ Password Recovery Email Warning:", mailErr.message);
@@ -370,7 +348,9 @@ export default async function loginUserHandler(req, res) {
             });
         }
 
-        // 4. VERIFY FORGOT PASSWORD OTP
+        // =========================================================================
+        // ACTION 4: VERIFY PASSWORD OTP
+        // =========================================================================
         if (action === "verify_password_otp") {
             if (!user_id || !otp) {
                 return res.status(400).json({ success: false, error: "Missing verification parameters." });
@@ -380,11 +360,11 @@ export default async function loginUserHandler(req, res) {
 
             if (!storedData || Date.now() > storedData.expiresAt) {
                 if (storedData) otpStore.delete(user_id);
-                return res.status(400).json({ success: false, error: "Verification code has expired." });
+                return res.status(400).json({ success: false, error: "Verification code has expired. Please request a new code." });
             }
 
             if (storedData.otp !== otp.trim()) {
-                return res.status(401).json({ success: false, error: "Invalid verification code." });
+                return res.status(401).json({ success: false, error: "Invalid verification code. Please check and try again." });
             }
 
             return res.status(200).json({
@@ -393,7 +373,9 @@ export default async function loginUserHandler(req, res) {
             });
         }
 
-        // 5. COMMIT NEW PASSWORD
+        // =========================================================================
+        // ACTION 5: COMMIT NEW PASSWORD
+        // =========================================================================
         if (action === "commit_new_password") {
             if (!user_id || !password) {
                 return res.status(400).json({ success: false, error: "Please provide a valid new password." });
@@ -405,19 +387,15 @@ export default async function loginUserHandler(req, res) {
 
             const { error: updateErr } = await supabase
                 .from("users")
-                .update({
-                    password: String(password).trim(),
-                    attempt: 0,
-                    attempt2: 0,
-                    restricted: false,
-                    activeuser: true
-                })
+                .update({ password })
                 .eq("uuid", user_id);
 
             if (updateErr) {
+                console.error("❌ Password Reset Database Error:", updateErr.message);
                 return res.status(500).json({ success: false, error: "Could not update password. Please try again." });
             }
 
+            // Remove OTP from cache
             otpStore.delete(user_id);
 
             return res.status(200).json({
@@ -430,6 +408,6 @@ export default async function loginUserHandler(req, res) {
 
     } catch (globalError) {
         console.error("❌ Critical Login Handler Fault:", globalError);
-        return res.status(500).json({ success: false, error: "An unexpected server error occurred." });
+        return res.status(500).json({ success: false, error: "An unexpected server error occurred. Please try again later." });
     }
 }
