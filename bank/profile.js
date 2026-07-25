@@ -28,16 +28,10 @@ export default async function handler(req, res) {
         res.setHeader("Access-Control-Allow-Origin", requestOrigin);
     }
 
-    // 2. Allow all HTTP methods your handlers use
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-
-    // 3. Explicitly allow all your specific custom app headers
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Action, X-Action-Phase, X-Transaction-Pin, X-User-UUID, X-Setting-Target, x-setting-target");
-
-    // 4. Keep your credentials authentication layer active
     res.setHeader("Access-Control-Allow-Credentials", "true");
 
-    // Handle preflight options request immediately
     if (req.method === "OPTIONS") {
         return res.status(200).end();
     }
@@ -80,7 +74,8 @@ export default async function handler(req, res) {
                     accountNumber, 
                     activeuser, 
                     block_transection, 
-                    image
+                    profileImage,
+                    tiers,
                 `)
                 .eq("uuid", decodedToken.uuid)
                 .maybeSingle();
@@ -89,7 +84,6 @@ export default async function handler(req, res) {
                 return res.status(444).json({ success: false, error: "User records validation fault." });
             }
 
-            // Clean string checks for structural name interpolation
             const firstName = userData.firstname || "";
             const middleName = userData.middlename ? userData.middlename.trim() : "";
             const lastName = userData.lastname || "";
@@ -102,9 +96,12 @@ export default async function handler(req, res) {
                 success: true,
                 data: {
                     uuid: userData.uuid,
+                    firstname: userData.firstname,
+                    middlename: userData.middlename,
+                    lastname: userData.lastname,
                     fullName: derivedFullName.trim(),
                     email: userData.email,
-                    phone: userData.phone,
+                    phonenumber: userData.phone,
                     city: userData.city,
                     country: userData.country,
                     address: userData.address,
@@ -115,7 +112,8 @@ export default async function handler(req, res) {
                     balance: userData.accountBalance,
                     activeuser: userData.activeuser,
                     block_transection: userData.block_transection,
-                    image: userData.image
+                    image: userData.profileImage, // Mapped down cleanly for profile.js UI expectations
+                    tiers: userData.tiers
                 }
             });
 
@@ -176,9 +174,10 @@ export default async function handler(req, res) {
 
                 const computedAssetPublicWebUrl = publicUrlData.publicUrl;
 
+                // FIXED: Now updates 'profileImage' instead of 'image' to respect database definitions
                 const { error: dataTableUpdateError } = await supabase
                     .from("users")
-                    .update({ image: computedAssetPublicWebUrl })
+                    .update({ profileImage: computedAssetPublicWebUrl })
                     .eq("id", userData.id);
 
                 if (dataTableUpdateError) throw new Error(`Database record synchronization failure: ${dataTableUpdateError.message}`);
@@ -196,6 +195,5 @@ export default async function handler(req, res) {
         });
     }
 
-    // Catch-all for any other methods (PUT, DELETE, etc.)
     return res.status(405).json({ success: false, error: "HTTP Method type not permitted." });
 }

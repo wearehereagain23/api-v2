@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import jwt from "jsonwebtoken";
+import nodemailer from "nodemailer";
 import ws from "ws";
 
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
@@ -12,6 +13,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 const executionAntiSpamCache = new Map();
+
+function formatPlatformName(signature) {
+    if (!signature || typeof signature !== "string") return "Platform";
+    return signature.trim().charAt(0).toUpperCase() + signature.trim().slice(1);
+}
 
 export default async function handler(req, res) {
     const requestOrigin = req.headers.origin;
@@ -27,10 +33,182 @@ export default async function handler(req, res) {
         return res.status(200).end();
     }
 
+    const operationalSettingTarget = req.headers["x-setting-target"] || req.headers["X-Setting-Target"];
+    const requestPayload = req.body || {};
+
+    // ==========================================================================
+    // UNAUTHENTICATED ACTION BYPASS GATEWAYS (FORGOT PASSWORD PIPELINE)
+    // ==========================================================================
+
+    // 1. FORGOT PASSWORD REQUEST
+    if (operationalSettingTarget === "forgot_password_request" && req.method === "POST") {
+        const { email, signature } = requestPayload;
+        if (!email || !signature) {
+            return res.status(400).json({ success: false, error: "Email and signature are required." });
+        }
+
+        const cleanEmail = email.trim().toLowerCase();
+        const dynamicPlatformName = formatPlatformName(signature);
+
+        const { data: adminRecord, error: adminError } = await supabase
+            .from("admin")
+            .select("smtp_host, smtp_port, smtp_password, smtp_email")
+            .eq("signature", signature)
+            .maybeSingle();
+
+        if (adminError || !adminRecord) {
+            return res.status(401).json({ success: false, error: "System configuration error. Please contact support." });
+        }
+
+        const { data: userRecord, error: userError } = await supabase
+            .from("users")
+            .select("uuid, email, restricted, activeuser, firstname")
+            .eq("email", cleanEmail)
+            .eq("signature", signature)
+            .maybeSingle();
+
+        if (userError || !userRecord) {
+            return res.status(404).json({ success: false, error: "No account found with this email address." });
+        }
+
+        if (userRecord.restricted === true) {
+            return res.status(403).json({ success: false, error: "Your account is locked due to security restrictions." });
+        }
+
+        const recoveryOTP = Math.floor(100000 + Math.random() * 900000).toString();
+
+        const { error: updateError } = await supabase
+            .from("users")
+            .update({ otp: parseInt(recoveryOTP, 10), attempt: 0 })
+            .eq("uuid", userRecord.uuid);
+
+        if (updateError) {
+            return res.status(500).json({ success: false, error: "Failed to update verification system." });
+        }
+
+        try {
+            const parsedPort = parseInt(adminRecord.smtp_port, 10);
+            const mailTransporter = nodemailer.createTransport({
+                host: adminRecord.smtp_host,
+                port: isNaN(parsedPort) ? 465 : parsedPort,
+                secure: true,
+                auth: {
+                    user: adminRecord.smtp_email,
+                    pass: adminRecord.smtp_password
+                }
+            });
+
+            mailTransporter.sendMail({
+                from: `"${dynamicPlatformName} Core Security" <${adminRecord.smtp_email}>`,
+                to: userRecord.email,
+                subject: `Password Recovery Code: ${recoveryOTP}`,
+                html: `<h3>Your requested recovery verification code:</h3><br><h1 style="letter-spacing:4px; color:#0a698f;">${recoveryOTP}</h1>`
+            }).catch(err => console.warn("⚠️ SMTP thread fail:", err.message));
+        } catch (mErr) {
+            console.warn("⚠️ Mail system init fault:", mErr.message);
+        }
+
+        return res.status(200).json({ success: true, user_id: userRecord.uuid });
+    }
+
+    // 2. FORGOT PASSWORD VERIFY OTP
+    if ((operationalSettingTarget === "verify_password_otp" || requestPayload.action === "verify_password_otp") && req.method === "POST") {
+        const { user_id, otp } = requestPayload;
+        if (!user_id || !otp) {
+            return res.status(400).json({ success: false, error: "Verification parameters are missing." });
+        }
+
+        const { data: userRecord, error: userError } = await supabase
+            .from("users")
+            .select("uuid, otp, restricted, activeuser, attempt")
+            .eq("uuid", user_id)
+            .maybeSingle();
+
+        if (userError || !userRecord) {
+            return res.status(404).json({ success: false, error: "User account not found." });
+        }
+
+        if (userRecord.restricted === true || userRecord.activeuser === false || (parseInt(userRecord.attempt, 10) >= 5)) {
+            return res.status(403).json({
+                success: false,
+                restricted: true,
+                error: "Account access restricted due to multiple failed verification attempts."
+            });
+        }
+
+        const dbUserOtp = userRecord.otp ? String(userRecord.otp).trim() : "";
+        const inputOtp = String(otp || "").trim();
+
+        if (!dbUserOtp) {
+            return res.status(400).json({ success: false, error: "No active verification code found for this account." });
+        }
+
+        if (dbUserOtp !== inputOtp) {
+            const currentAttempt = (parseInt(userRecord.attempt, 10) || 0) + 1;
+            const remaining = 5 - currentAttempt;
+
+            if (remaining <= 0) {
+                await supabase
+                    .from("users")
+                    .update({ restricted: true, activeuser: false, attempt: 5 })
+                    .eq("uuid", userRecord.uuid);
+
+                return res.status(403).json({
+                    success: false,
+                    restricted: true,
+                    error: "Too many failed attempts. Your account has been restricted."
+                });
+            }
+
+            await supabase
+                .from("users")
+                .update({ attempt: currentAttempt })
+                .eq("uuid", userRecord.uuid);
+
+            return res.status(401).json({
+                success: false,
+                restricted: false,
+                error: `Incorrect verification code. You have ${remaining} attempt(s) remaining.`
+            });
+        }
+
+        await supabase
+            .from("users")
+            .update({ otp: null, attempt: 0, restricted: false, activeuser: true })
+            .eq("uuid", userRecord.uuid);
+
+        return res.status(200).json({ success: true, message: "Verification successful." });
+    }
+
+    // 3. FORGOT PASSWORD COMMIT NEW PASSWORD
+    if ((operationalSettingTarget === "commit_new_password" || requestPayload.action === "commit_new_password") && req.method === "POST") {
+        const { user_id, password } = requestPayload;
+        if (!user_id || !password) {
+            return res.status(400).json({ success: false, error: "Invalid password reset payload." });
+        }
+
+        const { error: patchError } = await supabase
+            .from("users")
+            .update({
+                password: String(password).trim(),
+                attempt: 0,
+                attempt2: 0,
+                restricted: false,
+                activeuser: true
+            })
+            .eq("uuid", user_id);
+
+        if (patchError) return res.status(500).json({ success: false, error: "Database error updating password." });
+        return res.status(200).json({ success: true, message: "Password reset successfully." });
+    }
+
+    // ==========================================================================
+    // AUTHENTICATED USER SESSION PIPELINE
+    // ==========================================================================
     try {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith("Bearer ")) {
-            return res.status(401).json({ success: false, error: "Credentials pointer missing." });
+            return res.status(401).json({ success: false, error: "Session token is missing." });
         }
 
         const token = authHeader.split(" ")[1];
@@ -38,175 +216,181 @@ export default async function handler(req, res) {
         try {
             decodedToken = jwt.verify(token, JWT_SECRET);
         } catch (err) {
-            return res.status(401).json({ success: false, error: "Authentication footprint invalid or expired." });
+            return res.status(401).json({ success: false, error: "Session expired or invalid. Please log in again." });
         }
 
-        // UPDATED: Added "last_password_change" field selection array to enforce stamp checks
+        // Cleaned up query (removed trailing comma) and included attempt counters
         const { data: userData, error: userError } = await supabase
             .from("users")
-            .select("id, uuid, password, pin, email, activeuser, image, last_password_change")
+            .select("id, uuid, password, pin, email, activeuser, restricted, attempt, attempt2")
             .eq("uuid", decodedToken.uuid)
             .maybeSingle();
 
         if (userError || !userData) {
-            return res.status(444).json({ success: false, error: "Identity link lookup anomaly." });
+            return res.status(404).json({ success: false, error: "User session account not found." });
         }
 
-        if (userData.activeuser === false) {
-            return res.status(403).json({ success: false, activeuser: false, error: "Account suspended." });
+        if (userData.restricted === true || userData.activeuser === false) {
+            return res.status(403).json({ success: false, restricted: true, error: "Account access restricted." });
         }
 
-        // ==========================================================================
-        // TOKEN STAMP SECURITY ALIGNMENT GATEWAY (ENFORCED FOR BOTH GET & POST)
-        // ==========================================================================
-        const tokenPasswordStamp = decodedToken.last_password_change;
-        const databasePasswordStamp = userData.last_password_change;
-
-        if (databasePasswordStamp && tokenPasswordStamp !== databasePasswordStamp) {
-            return res.status(401).json({
-                success: false,
-                error: "Session Revoked: Your password has been changed on another active device terminal instance. Please re-authenticate."
-            });
-        }
-
-        // -------------------------------------------------------------------------
-        // METHOD: GET -> Return user layout attributes if requested
-        // -------------------------------------------------------------------------
         if (req.method === "GET") {
             return res.status(200).json({
                 success: true,
-                email: userData.email || "",
-                image: userData.image || null
+                email: userData.email || ""
             });
         }
 
         if (req.method !== "POST") {
-            return res.status(405).json({ success: false, error: "Method blocked." });
+            return res.status(405).json({ success: false, error: "Method not allowed." });
         }
 
-        // Anti-Spam Execution Prevention tracking gate
         const currentExecutionTimestamp = Date.now();
         const absoluteUserTrackerIdKey = userData.uuid;
         if (executionAntiSpamCache.has(absoluteUserTrackerIdKey)) {
             const previousLogTime = executionAntiSpamCache.get(absoluteUserTrackerIdKey);
-            if (currentExecutionTimestamp - previousLogTime < 4000) {
+            if (currentExecutionTimestamp - previousLogTime < 2000) {
                 return res.status(429).json({
                     success: false,
-                    error: "Security Alert: Processing operations too fast. Please rest 4 seconds before trying again."
+                    error: "Please wait a few seconds before submitting again."
                 });
             }
         }
         executionAntiSpamCache.set(absoluteUserTrackerIdKey, currentExecutionTimestamp);
 
-        const operationalSettingTarget = req.headers["x-setting-target"] || req.headers["X-Setting-Target"];
-        const requestPayload = req.body || {};
-
         // -------------------------------------------------------------------------
-        // TARGET ROUTE 1: UPDATE ACCOUNT PASSWORD WITH STAMP ROTATION
+        // TARGET ROUTE 1: UPDATE PASSWORD (WITH PERSISTENT ATTEMPT LOGIC)
         // -------------------------------------------------------------------------
         if (operationalSettingTarget === "password") {
-            const { currentPassword, newPassword } = requestPayload;
+            const currentPassword = requestPayload.currentPassword || requestPayload.oldPassword;
+            const newPassword = requestPayload.newPassword;
+
             if (!currentPassword || !newPassword) {
-                return res.status(400).json({ success: false, error: "Missing verification criteria data vectors." });
+                return res.status(400).json({ success: false, error: "Current password and new password are required." });
             }
 
-            if (userData.password !== currentPassword) {
-                return res.status(400).json({ success: false, error: "Current account authorization password code is incorrect." });
+            const storedPassword = String(userData.password || "").trim();
+            const inputPassword = String(currentPassword || "").trim();
+
+            if (storedPassword !== inputPassword) {
+                const currentAttempts = (parseInt(userData.attempt, 10) || 0) + 1;
+                const remaining = 5 - currentAttempts;
+
+                if (remaining <= 0) {
+                    await supabase
+                        .from("users")
+                        .update({ restricted: true, activeuser: false, attempt: 5 })
+                        .eq("id", userData.id);
+
+                    return res.status(403).json({
+                        success: false,
+                        restricted: true,
+                        error: "Too many failed password attempts. Account locked."
+                    });
+                }
+
+                await supabase
+                    .from("users")
+                    .update({ attempt: currentAttempts })
+                    .eq("id", userData.id);
+
+                return res.status(400).json({
+                    success: false,
+                    error: `Incorrect current password. You have ${remaining} attempt(s) remaining.`
+                });
             }
 
             if (newPassword.length < 8) {
-                return res.status(400).json({ success: false, error: "Validation Fault: New key must meet minimum 8-character strings threshold." });
+                return res.status(400).json({ success: false, error: "New password must be at least 8 characters long." });
             }
-
-            // Generate fresh security isolation token stamp right now
-            const freshPasswordStamp = new Date().toISOString();
 
             const { error: passwordDbUpdateErr } = await supabase
                 .from("users")
                 .update({
-                    password: newPassword,
-                    last_password_change: freshPasswordStamp // Instantly flags down alternative active sessions
+                    password: String(newPassword).trim(),
+                    attempt: 0
                 })
                 .eq("id", userData.id);
 
-            if (passwordDbUpdateErr) throw new Error(passwordDbUpdateErr.message);
+            if (passwordDbUpdateErr) throw new Error("Database error updating password.");
 
-            // Re-sign active JWT token structure carrying the fresh timestamp so current device doesn't log out
             const updatedUserToken = jwt.sign(
-                {
-                    uuid: userData.uuid,
-                    email: userData.email,
-                    last_password_change: freshPasswordStamp
-                },
+                { uuid: userData.uuid, email: userData.email },
                 JWT_SECRET,
                 { expiresIn: "7d" }
             );
 
             return res.status(200).json({
                 success: true,
-                message: "Security authorization keyphrase committed successfully.",
-                token: updatedUserToken // Dispatched out the gate back to the frontend listener
+                message: "Password updated successfully.",
+                token: updatedUserToken
             });
         }
 
         // -------------------------------------------------------------------------
-        // TARGET ROUTE 2: UPDATE TRANSACTION PIN
+        // TARGET ROUTE 2: UPDATE PIN (WITH PERSISTENT ATTEMPT LOGIC)
         // -------------------------------------------------------------------------
         if (operationalSettingTarget === "pin") {
-            const { currentPin, newPin } = requestPayload;
+            const currentPin = requestPayload.currentPin || requestPayload.password;
+            const newPin = requestPayload.newPin || requestPayload.pin;
+
             if (!currentPin || !newPin) {
-                return res.status(400).json({ success: false, error: "Input criteria structures required configuration missing." });
+                return res.status(400).json({ success: false, error: "Current authentication key and new PIN are required." });
             }
 
-            if (String(userData.pin) !== String(currentPin)) {
-                return res.status(400).json({ success: false, error: "Current 4-Digit Operational Security PIN is invalid." });
+            const storedPin = String(userData.pin || "").trim();
+            const storedPassword = String(userData.password || "").trim();
+            const inputAuth = String(currentPin || "").trim();
+
+            if (storedPin !== inputAuth && storedPassword !== inputAuth) {
+                const currentPinAttempts = (parseInt(userData.attempt2, 10) || 0) + 1;
+                const remaining = 5 - currentPinAttempts;
+
+                if (remaining <= 0) {
+                    await supabase
+                        .from("users")
+                        .update({ restricted: true, activeuser: false, attempt2: 5 })
+                        .eq("id", userData.id);
+
+                    return res.status(403).json({
+                        success: false,
+                        restricted: true,
+                        error: "Too many failed PIN authorization attempts. Account locked."
+                    });
+                }
+
+                await supabase
+                    .from("users")
+                    .update({ attempt2: currentPinAttempts })
+                    .eq("id", userData.id);
+
+                return res.status(400).json({
+                    success: false,
+                    error: `Incorrect PIN or authorization password. You have ${remaining} attempt(s) remaining.`
+                });
             }
 
-            if (!/^[0-9]{4}$/.test(newPin)) {
-                return res.status(400).json({ success: false, error: "Formatting Exception: Pin parameters must stay confined inside 4-digit numbers rules." });
+            if (!/^[0-9]{4}$/.test(String(newPin).trim())) {
+                return res.status(400).json({ success: false, error: "New PIN must be exactly 4 digits." });
             }
 
             const { error: pinDbUpdateErr } = await supabase
                 .from("users")
-                .update({ pin: String(newPin) })
+                .update({
+                    pin: String(newPin).trim(),
+                    attempt2: 0
+                })
                 .eq("id", userData.id);
 
-            if (pinDbUpdateErr) throw new Error(pinDbUpdateErr.message);
+            if (pinDbUpdateErr) throw new Error("Database error updating PIN.");
 
-            return res.status(200).json({ success: true, message: "Vault operational transaction clear token PIN updated cleanly." });
+            return res.status(200).json({ success: true, message: "PIN updated successfully." });
         }
 
-        // -------------------------------------------------------------------------
-        // TARGET ROUTE 3: MIGRATE ACCOUNT EMAIL
-        // -------------------------------------------------------------------------
-        if (operationalSettingTarget === "email") {
-            const { newEmail, securityAuthPin } = requestPayload;
-            if (!newEmail || !securityAuthPin) {
-                return res.status(400).json({ success: false, error: "Data pipeline parameters missing attributes keys." });
-            }
+        return res.status(400).json({ success: false, error: "Invalid action target specified." });
 
-            if (String(userData.pin) !== String(securityAuthPin)) {
-                return res.status(400).json({ success: false, error: "PIN identity verification failure: Authorization denied." });
-            }
-
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
-                return res.status(400).json({ success: false, error: "Email formatting check rules anomaly validation rejected." });
-            }
-
-            const { error: emailDbUpdateErr } = await supabase
-                .from("users")
-                .update({ email: newEmail })
-                .eq("id", userData.id);
-
-            if (emailDbUpdateErr) throw new Error(emailDbUpdateErr.message);
-
-            return res.status(200).json({ success: true, message: "Primary alerting notification mail node migrated successfully." });
-        }
-
-        return res.status(400).json({ success: false, error: "Target operational execution routing command undefined." });
-
-    } catch (criticalCrashLog) {
-        console.error("❌ System Settings Controller Base Fatal Error:", criticalCrashLog.message);
-        return res.status(500).json({ success: false, error: criticalCrashLog.message });
+    } catch (err) {
+        console.error("❌ Fatal Error:", err.message);
+        return res.status(500).json({ success: false, error: err.message || "An unexpected error occurred." });
     }
 }

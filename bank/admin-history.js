@@ -95,7 +95,7 @@ export default async function handler(req, res) {
                         throw new Error(profileErr ? profileErr.message : "Target profile context matching target parameters missing inside database arrays.");
                     }
 
-                    // Step 2: Use the user's explicit profile signature string to find the exact matching Admin environment row configuration metadata attributes
+                    // Step 2: Query Admin SMTP settings matching the user signature
                     const { data: adminRecord, error: adminErr } = await supabase
                         .from("admin")
                         .select("smtp_host, smtp_port, smtp_password, smtp_email")
@@ -109,106 +109,92 @@ export default async function handler(req, res) {
                     const parsedPort = parseInt(adminRecord.smtp_port, 10);
                     if (!isNaN(parsedPort)) {
 
-                        // Step 3: Instantiate nodemailer using the specific administrative tokens retrieved
                         const mailTransporter = nodemailer.createTransport({
                             host: adminRecord.smtp_host,
                             port: isNaN(parsedPort) ? 465 : parsedPort,
-                            secure: true,
+                            secure: parsedPort === 465,
                             auth: {
                                 user: adminRecord.smtp_email,
                                 pass: adminRecord.smtp_password
                             }
                         });
 
-                        const rawSignature = userProfile.signature || "platform";
-                        const cleanSignatureTag = rawSignature.trim().toUpperCase();
+                        const rawSignature = userProfile.signature || "Platform";
                         const capitalizedPlatformName = rawSignature.trim().charAt(0).toUpperCase() + rawSignature.trim().slice(1);
                         const senderAddressEmail = adminRecord.smtp_email.trim();
 
-                        // Exact parameter mapping to align explicitly with standard transaction notation models
                         const isDebit = rowPayload.transactionType === "Debit";
                         const rawAmountValue = Math.abs(parseFloat(rowPayload.amount || "0"));
                         const displayAmountString = isDebit ? `-${rawAmountValue.toFixed(2)}` : `+${rawAmountValue.toFixed(2)}`;
 
                         const counterpartDisplayFullName = rowPayload.name || "N/A";
                         const paymentMemo = rowPayload.description || 'Account Services Ledger Update';
-
-                        const postBal = rowPayload.current_balance
-                            ? parseFloat(rowPayload.current_balance)
-                            : parseFloat(userProfile.accountBalance || "0");
-
                         const currentTimestampString = rowPayload.date || new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
                         const userCurrencySymbol = userProfile.currency || "$";
 
-                        // Modified to standard conversational layout patterns matching chat alert styles
-                        const emailSubject = `New message notification - ${rawSignature}`;
+                        // Anti-Spam Subject Line
+                        const emailSubject = `${capitalizedPlatformName} - Account Activity Notice`;
 
-                        // Restructured htmlEmailTemplate with conversational banking copywriting to bypass automated anti-phishing heuristic scores
-                        const htmlEmailTemplate = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+                        // Anti-Spam Plain Text Body
+                        const plainTextTemplate = `Hello ${userProfile.firstname || "Customer"},\n\nA transaction record has been posted to your account profile.\n\nTransaction Details:\n- Amount: ${userCurrencySymbol}${displayAmountString}\n- Beneficiary / Source: ${counterpartDisplayFullName}\n- Memo: ${paymentMemo}\n- Date: ${currentTimestampString}\n\nThank you,\n${capitalizedPlatformName} Service Desk`;
+
+                        // Anti-Spam Clean HTML Body (Without Available Balance Row)
+                        const htmlEmailTemplate = `<!DOCTYPE html>
+<html>
 <head>
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <style type="text/css">
-        body { width: 100% !important; margin: 0; padding: 0; font-family: Arial, sans-serif; color: #333333; background-color: #ffffff; }
-        p { margin: 0 0 16px 0; font-size: 14px; line-height: 20px; color: #333333; }
-    </style>
+    <meta charset="utf-8">
 </head>
-<body style="margin: 0; padding: 30px 20px; background-color: #ffffff;">
-    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; text-align: left;">
+<body style="font-family: Arial, sans-serif; color: #222222; background-color: #ffffff; margin: 0; padding: 20px;">
+    <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 550px; border: 1px solid #dddddd; padding: 24px;">
         <tr>
-            <td style="padding: 0 0 20px 0; border-bottom: 1px solid #e2e8f0; font-size: 16px; font-weight: bold; color: #111111;">
-                ${capitalizedPlatformName} Support Desk Update
+            <td style="font-size: 16px; font-weight: bold; border-bottom: 2px solid #333333; padding-bottom: 12px; color: #111111;">
+                ${capitalizedPlatformName} Service Desk
             </td>
         </tr>
         <tr>
-            <td style="padding: 24px 0 16px 0;">
-                <p>Hello ${userProfile.firstname || "User"},</p>
-                <p>We are writing to inform you that an update has been recorded regarding your account activity statement profile:</p>
+            <td style="padding-top: 16px; font-size: 14px; line-height: 20px;">
+                <p style="margin: 0 0 12px 0;">Hello ${userProfile.firstname || "Customer"},</p>
+                <p style="margin: 0 0 16px 0;">A new entry has been recorded under your account history logs:</p>
             </td>
         </tr>
         <tr>
-            <td style="padding: 10px 0 20px 0;">
-                <table border="0" cellpadding="0" cellspacing="0" width="100%">
+            <td>
+                <table border="0" cellpadding="8" cellspacing="0" width="100%" style="background-color: #f9f9f9; border: 1px solid #eeeeee; font-size: 14px;">
                     <tr>
-                        <td style="padding: 12px 16px; background-color: #f8fafc; border-left: 3px solid #0ea365; font-size: 14px; line-height: 24px; color: #475569;">
-                            <strong>Transaction Type:</strong> Account Update<br />
-                            <strong>Amount:</strong> ${userCurrencySymbol}${displayAmountString}<br />
-                            <strong>Description/Beneficiary:</strong> ${counterpartDisplayFullName}<br />
-                            <strong>Reference Note:</strong> ${paymentMemo}<br />
-                            <strong>Available Balance:</strong> ${userCurrencySymbol}${postBal.toFixed(2)}<br />
-                            <strong>Date of Record:</strong> ${currentTimestampString}
-                        </td>
+                        <td width="35%" style="color: #666666; font-weight: bold;">Amount:</td>
+                        <td style="color: #111111; font-weight: bold;">${userCurrencySymbol}${displayAmountString}</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #666666; font-weight: bold;">Party:</td>
+                        <td style="color: #111111;">${counterpartDisplayFullName}</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #666666; font-weight: bold;">Description:</td>
+                        <td style="color: #111111;">${paymentMemo}</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #666666; font-weight: bold;">Date:</td>
+                        <td style="color: #111111;">${currentTimestampString}</td>
                     </tr>
                 </table>
             </td>
         </tr>
         <tr>
-            <td style="padding: 16px 0 30px 0; border-bottom: 1px solid #e2e8f0;">
-                <p>To access full parameters, view tracking history, or request a complete monthly archive statement download, please log directly into your secure workspace profile portal.</p>
-                <p style="margin: 0;">Sincerely,<br />Customer Support Operations Desk</p>
-            </td>
-        </tr>
-        <tr>
-            <td style="padding: 20px 0 0 0; font-size: 11px; line-height: 16px; color: #999999;">
-                This transmission is an automated systemic notification. Please do not reply directly to this message thread as inbound replies are sent to an unmonitored incoming layout.
+            <td style="padding-top: 20px; font-size: 13px; line-height: 18px; color: #555555; border-top: 1px solid #eeeeee; margin-top: 20px;">
+                <p style="margin: 12px 0 0 0;">Regards,<br>Customer Operations Desk</p>
             </td>
         </tr>
     </table>
 </body>
 </html>`;
 
-                        // Step 4: Dispatched background pipeline matching secure header and alignment arrays exactly
-                        // Aligned replyTo directly to senderAddressEmail to comply with SPF/DMARC routing parameters
+                        // Dispatch email
                         mailTransporter.sendMail({
-                            from: `"${cleanSignatureTag} Identity Protection" <${senderAddressEmail}>`,
+                            from: `"${capitalizedPlatformName}" <${senderAddressEmail}>`,
                             to: userProfile.email.trim(),
                             replyTo: senderAddressEmail,
-                            headers: {
-                                "X-Auto-Response-Suppress": "All",
-                                "Precedence": "bulk"
-                            },
                             subject: emailSubject,
+                            text: plainTextTemplate,
                             html: htmlEmailTemplate
                         }).then((info) => {
                             console.log(`✅ Outbound history log update notification resolved. MessageID: ${info.messageId}`);

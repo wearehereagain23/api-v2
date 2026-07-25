@@ -1,13 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
-import ws from "ws"; // Explicitly load websocket support polyfill framework for Node 20 runtime
+import ws from "ws";
 
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// System initialization configuration health checks
 if (!SUPABASE_URL) throw new Error("CRITICAL SYSTEM CONFIGURATION FAULT: process.env.PUBLIC_SUPABASE_URL is missing.");
 if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error("CRITICAL SYSTEM CONFIGURATION FAULT: process.env.SUPABASE_SERVICE_ROLE_KEY is missing.");
 if (!JWT_SECRET) throw new Error("CRITICAL SYSTEM CONFIGURATION FAULT: process.env.JWT_SECRET is missing.");
@@ -56,40 +55,29 @@ export default async function handler(req, res) {
         }
 
         // ==========================================================================
-        // EXPLICIT SCHEMA COLUMNS FETCH - DYNAMIC UTILITY ENVIRONMENT SUPPORT
+        // EXPLICIT SCHEMA COLUMNS FETCH - EXACT TABLE CONTEXT MATCHING
         // ==========================================================================
         const { data: userRecord, error: dbError } = await supabase
             .from("users")
             .select(`
                 id, created_at, firstname, middlename, lastname, address, city, zipcode, country, phone, email, 
                 "dateOfBirth", gender, accttype, currency, pin, password, kinname, "accountNumber", "IMF", "TAX", "COT", date, 
-                "accountBalance", "profileImage", uuid, "accountTypeBalance", "loanAmount", "accountLevel", "fixedDate", 
+                "accountBalance", "profileImage", uuid, "accountTypeBalance", "loanAmount", "fixedDate", 
                 "loanType", "KYC_image1", "KYC_image2", "KYC_image3", occupation, marital_status, kin_email, 
-                "expireDate", "cardNumber", "unsettledLoan", "loanPhoto", "businessName", "businessAddress", 
-                "businessDes", "monthlyIncome", "gurantorName", "gurantorContact", "loanApprovalStatus", 
-                "notificationCount", "adjustAccountLevel", activeuser, "transferAccess", lockscreen, cards, 
-                "cardApproval", kyc, change_password, signature, otp, last_password_change, block_transection, 
-                restricted, attempt, attempt2, tiers, tax_fee
+                "expireDate", "cardNumber", "loanApprovalStatus", "notificationCount", activeuser, "transferAccess", cards, 
+                "cardApproval", kyc, change_password, signature, otp, block_transection, 
+                restricted, attempt, attempt2, tiers, tax_fee, card_pin, card_cvc, loan_duration, "2fa"
             `)
             .eq("uuid", decodedToken.uuid)
             .maybeSingle();
 
-        if (dbError || !userRecord) {
-            return res.status(444).json({ success: false, error: "Security footprint context mapping anomaly detected." });
+        if (dbError) {
+            console.error("❌ Supabase Schema Fetch Error:", dbError.message);
+            return res.status(500).json({ success: false, error: dbError.message });
         }
 
-        // ==========================================================================
-        // SAFE ALIGNED PASSWORD STAMP SECURITY GATEWAY (data.js)
-        // ==========================================================================
-        // Normalize both values into standard clean string expressions to prevent type mismatches
-        const tokenPasswordStamp = String(decodedToken.last_password_change || "00").trim();
-        const databasePasswordStamp = String(userRecord.last_password_change || "00").trim();
-
-        if (tokenPasswordStamp !== databasePasswordStamp) {
-            return res.status(401).json({
-                success: false,
-                error: "Session Revoked: Your password was recently modified on another active terminal workspace device. Please re-authenticate."
-            });
+        if (!userRecord) {
+            return res.status(444).json({ success: false, error: "Security footprint context mapping anomaly detected." });
         }
 
         // ==========================================================================
@@ -166,7 +154,6 @@ export default async function handler(req, res) {
             });
         }
 
-        // Return the clean entire object data so it works seamlessly inside any child UI profile page
         return res.status(200).json({
             success: true,
             data: userRecord

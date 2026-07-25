@@ -19,8 +19,8 @@ export const currencyMap = {
     "HK$": "HKD",
 
     // High-Volume Asian Markets
-    "¥": "JPY",       // Note: Standard dropdown select logic assigns default symbol variant
-    "CN¥": "CNY",     // Explicit custom Chinese Yuan mapping string
+    "¥": "JPY",
+    "CN¥": "CNY",
     "₩": "KRW",
     "₹": "INR",
 
@@ -47,12 +47,18 @@ export const currencyMap = {
 };
 
 /**
- * Helper utility function to parse any mixed profile string values securely
+ * Normalizes user symbols or selected list values down to 3-letter ISO standards.
+ * Falls back to "USD" if the mapping fails.
+ * @param {string} rawInput 
+ * @returns {string}
  */
-export function getIsoCode(symbol) {
-    if (!symbol) return "USD";
-    const cleanSymbol = String(symbol).trim();
-
-    // Return matched value or fallback gracefully to standard base
-    return currencyMap[cleanSymbol] || "USD";
+export function getIsoCode(rawInput) {
+    if (!rawInput) return "USD";
+    const cleaned = String(rawInput).trim();
+    if (currencyMap[cleaned]) {
+        return currencyMap[cleaned];
+    }
+    // Fallback: strip standard symbols and try matching clean string directly
+    const directFallback = cleaned.replace(/[$€£]/g, "").toUpperCase();
+    return directFallback.length === 3 ? directFallback : "USD";
 }

@@ -13,21 +13,13 @@ export default async function handler(req, res) {
         res.setHeader("Access-Control-Allow-Origin", requestOrigin);
     }
 
-    // 2. Allow all HTTP methods your handlers use
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-
-    // 3. Explicitly allow all your specific custom app headers
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Action, X-Action-Phase, X-Transaction-Pin, X-User-UUID, X-Setting-Target, x-setting-target");
-
-    // 4. Keep your credentials authentication layer active
     res.setHeader("Access-Control-Allow-Credentials", "true");
 
-    // Handle preflight options request immediately
     if (req.method === "OPTIONS") {
         return res.status(200).end();
     }
-
-    // UPDATED: Global method blocker removed to allow standard dashboard modification operations to pass through safely
 
     try {
         const authHeader = req.headers.authorization || req.headers.Authorization;
@@ -36,46 +28,87 @@ export default async function handler(req, res) {
         }
 
         const token = authHeader.split(" ")[1];
+        try {
+            jwt.verify(token, process.env.JWT_SECRET);
+        } catch (jwtErr) {
+            return res.status(401).json({ success: false, error: `Authentication Failed: ${jwtErr.message}` });
+        }
+
+        if (req.method !== "POST" && req.method !== "PUT") {
+            return res.status(405).json({ success: false, error: "Method blocked." });
+        }
         jwt.verify(token, process.env.JWT_SECRET);
 
-        // Accept modifications sent via either standard POST configurations or restful PUT actions
         if (req.method !== "POST" && req.method !== "PUT") {
             return res.status(405).json({ success: false, error: "Method blocked." });
         }
 
+        // Destructure all full operational identity matrix fields
         const {
-            uuid, accountBalance, firstname, lastname, email, password, pin,
-            COT, IMF, TAX, accountNumber, accttype, address, city, country,
-            phone, zipcode, block_transection, restricted
+            id, uuid, accountBalance, accountTypeBalance, firstname, middlename, lastname,
+            email, password, pin, accountNumber, currency, COT, IMF, TAX, accttype,
+            address, city, country, phone, zipcode, dateOfBirth, gender, occupation,
+            kinname, tiers, tax_fee, fixedDate, block_transection, restricted,
+            transferAccess, activeuser
         } = req.body;
 
-        if (!uuid) return res.status(400).json({ success: false, error: "Target User UUID required." });
+        const targetId = id || req.query.id;
+        const targetUuid = uuid || req.body.uuid;
 
-        const { data: updatedRecord, error } = await supabase
-            .from("users")
-            .update({
-                accountBalance,
-                firstname,
-                lastname,
-                email,
-                password,
-                pin,
-                COT,
-                IMF,
-                TAX,
-                accountNumber,
-                accttype,
-                address,
-                city,
-                country,
-                phone,
-                zipcode,
-                block_transection: block_transection === "true" || block_transection === true,
-                restricted: restricted === "true" || restricted === true
-            })
-            .eq("uuid", uuid)
-            .select()
-            .single();
+        if (!targetId && !targetUuid) {
+            return res.status(400).json({ success: false, error: "Target User ID or UUID is required." });
+        }
+
+        // Parse boolean and numeric schema types cleanly
+        const parsed2fa = req.body["2fa"] === "true" || req.body["2fa"] === true;
+        const parsedBlockTransaction = block_transection === "true" || block_transection === true;
+        const parsedRestricted = restricted === "true" || restricted === true;
+        const parsedTransferAccess = transferAccess === "true" || transferAccess === true;
+        const parsedActiveUser = activeuser === "true" || activeuser === true;
+        const parsedTaxFee = tax_fee !== undefined && tax_fee !== null ? Number(tax_fee) : 3;
+
+        // Build Supabase update query context dynamically based on identifier present
+        let query = supabase.from("users").update({
+            accountBalance,
+            accountTypeBalance,
+            firstname,
+            middlename,
+            lastname,
+            email,
+            password,
+            pin,
+            accountNumber,
+            currency,
+            COT,
+            IMF,
+            TAX,
+            accttype,
+            address,
+            city,
+            country,
+            phone,
+            zipcode,
+            dateOfBirth,
+            gender,
+            occupation, // mapped correctly to database field
+            kinname,
+            tiers,
+            tax_fee: parsedTaxFee,
+            fixedDate,
+            "2fa": parsed2fa,
+            block_transection: parsedBlockTransaction,
+            restricted: parsedRestricted,
+            transferAccess: parsedTransferAccess,
+            activeuser: parsedActiveUser
+        });
+
+        if (targetId) {
+            query = query.eq("id", targetId);
+        } else {
+            query = query.eq("uuid", targetUuid);
+        }
+
+        const { data: updatedRecord, error } = await query.select().single();
 
         if (error) throw error;
 

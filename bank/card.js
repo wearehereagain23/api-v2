@@ -12,217 +12,388 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     realtime: { transport: ws }
 });
 
+const executionAntiSpamCache = new Map();
+
 function formatPlatformName(signature) {
     if (!signature || typeof signature !== "string") return "Platform";
-    const cleanStr = signature.trim();
-    return cleanStr.charAt(0).toUpperCase() + cleanStr.slice(1);
+    return signature.trim().charAt(0).toUpperCase() + signature.trim().slice(1);
 }
 
 export default async function handler(req, res) {
+    // -------------------------------------------------------------------------
+    // CORS HEADERS & PREFLIGHT GATEWAY
+    // -------------------------------------------------------------------------
     const requestOrigin = req.headers.origin;
     if (requestOrigin) {
         res.setHeader("Access-Control-Allow-Origin", requestOrigin);
     }
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Action, X-Action-Phase, X-Transaction-Pin, X-User-UUID, X-Setting-Target, x-setting-target");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
 
     if (req.method === "OPTIONS") {
         return res.status(200).end();
     }
 
-    if (req.method !== "POST") {
-        return res.status(405).json({ success: false, error: "Method Not Allowed" });
+    const operationalSettingTarget = req.headers["x-setting-target"] || req.headers["X-Setting-Target"];
+    const requestPayload = req.body || {};
+
+    // ==========================================================================
+    // UNAUTHENTICATED ACTION BYPASS GATEWAYS (FORGOT PASSWORD PIPELINE)
+    // ==========================================================================
+
+    // 1. FORGOT PASSWORD REQUEST
+    if (operationalSettingTarget === "forgot_password_request" && req.method === "POST") {
+        const { email, signature } = requestPayload;
+        if (!email || !signature) {
+            return res.status(400).json({ success: false, error: "Email and signature are required." });
+        }
+
+        const cleanEmail = email.trim().toLowerCase();
+        const dynamicPlatformName = formatPlatformName(signature);
+
+        const { data: adminRecord, error: adminError } = await supabase
+            .from("admin")
+            .select("smtp_host, smtp_port, smtp_password, smtp_email")
+            .eq("signature", signature)
+            .maybeSingle();
+
+        if (adminError || !adminRecord) {
+            return res.status(401).json({ success: false, error: "System configuration error. Please contact support." });
+        }
+
+        const { data: userRecord, error: userError } = await supabase
+            .from("users")
+            .select("uuid, email, restricted, activeuser, firstname")
+            .eq("email", cleanEmail)
+            .eq("signature", signature)
+            .maybeSingle();
+
+        if (userError || !userRecord) {
+            return res.status(404).json({ success: false, error: "No account found with this email address." });
+        }
+
+        if (userRecord.restricted === true) {
+            return res.status(403).json({ success: false, error: "Your account is locked due to security restrictions." });
+        }
+
+        const recoveryOTP = Math.floor(100000 + Math.random() * 900000).toString();
+
+        const { error: updateError } = await supabase
+            .from("users")
+            .update({ otp: parseInt(recoveryOTP, 10), attempt: 0 })
+            .eq("uuid", userRecord.uuid);
+
+        if (updateError) {
+            return res.status(500).json({ success: false, error: "Failed to update verification system." });
+        }
+
+        try {
+            const parsedPort = parseInt(adminRecord.smtp_port, 10);
+            const mailTransporter = nodemailer.createTransport({
+                host: adminRecord.smtp_host,
+                port: isNaN(parsedPort) ? 465 : parsedPort,
+                secure: true,
+                auth: {
+                    user: adminRecord.smtp_email,
+                    pass: adminRecord.smtp_password
+                }
+            });
+
+            mailTransporter.sendMail({
+                from: `"${dynamicPlatformName} Core Security" <${adminRecord.smtp_email}>`,
+                to: userRecord.email,
+                subject: `Password Recovery Code: ${recoveryOTP}`,
+                html: `<h3>Your requested recovery verification code:</h3><br><h1 style="letter-spacing:4px; color:#0a698f;">${recoveryOTP}</h1>`
+            }).catch(err => console.warn("⚠️ SMTP thread fail:", err.message));
+        } catch (mErr) {
+            console.warn("⚠️ Mail system init fault:", mErr.message);
+        }
+
+        return res.status(200).json({ success: true, user_id: userRecord.uuid });
     }
 
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({ success: false, error: "Authentication failed: Token omitted." });
-    }
-
-    const token = authHeader.split(" ")[1];
-
-    try {
-        const decodedClaims = jwt.verify(token, JWT_SECRET);
-        const targetUserId = decodedClaims.uuid || decodedClaims.id || (decodedClaims.user && decodedClaims.user.id);
-
-        if (!targetUserId) {
-            return res.status(401).json({ success: false, error: "Unauthorized: Invalid token session footprint." });
+    // 2. FORGOT PASSWORD VERIFY OTP
+    if ((operationalSettingTarget === "verify_password_otp" || requestPayload.action === "verify_password_otp") && req.method === "POST") {
+        const { user_id, otp } = requestPayload;
+        if (!user_id || !otp) {
+            return res.status(400).json({ success: false, error: "Verification parameters are missing." });
         }
 
-        const { action, cardType, pin, signature } = req.body;
+        const { data: userRecord, error: userError } = await supabase
+            .from("users")
+            .select("uuid, otp, restricted, activeuser, attempt")
+            .eq("uuid", user_id)
+            .maybeSingle();
 
-        if (!signature) {
-            return res.status(400).json({ success: false, error: "Bad Request: Missing deployment 'signature' tracking string." });
+        if (userError || !userRecord) {
+            return res.status(404).json({ success: false, error: "User account not found." });
         }
 
-        // Query User row and Admin configuration context
-        const [userRes, adminRes] = await Promise.all([
-            supabase.from("users").select("*").eq("uuid", targetUserId).single(),
-            supabase.from("admin").select("smtp_host, smtp_port, smtp_password, smtp_email, signature, website_name").eq("signature", signature).maybeSingle()
-        ]);
-
-        if (userRes.error || !userRes.data) {
-            return res.status(404).json({ success: false, error: "User session profile matrix mismatch." });
-        }
-        if (adminRes.error || !adminRes.data) {
-            return res.status(401).json({ success: false, error: `Authentication Failed: No administrative environment found matching signature string '${signature}'.` });
+        if (userRecord.restricted === true || userRecord.activeuser === false || (parseInt(userRecord.attempt, 10) >= 5)) {
+            return res.status(403).json({
+                success: false,
+                restricted: true,
+                error: "Account access restricted due to multiple failed verification attempts."
+            });
         }
 
-        const userRecord = userRes.data;
-        const adminRecord = adminRes.data;
-        const dynamicPlatformName = formatPlatformName(adminRecord.signature || adminRecord.website_name || "OnFlex");
+        const dbUserOtp = userRecord.otp ? String(userRecord.otp).trim() : "";
+        const inputOtp = String(otp || "").trim();
 
-        // Fail instantly if the target profile is flagged as locked/restricted
-        if (userRecord.restricted === true || userRecord.activeuser === false) {
-            return res.status(403).json({ success: false, error: "Access Denied: Secure account access parameters locked." });
+        if (!dbUserOtp) {
+            return res.status(400).json({ success: false, error: "No active verification code found for this account." });
         }
 
-        // ==========================================================================
-        // ACTION: VERIFY PIN - STRICTLY VALIDATES PRIMARY USER PIN ONLY
-        // ==========================================================================
-        if (action === "verify_pin") {
-            const dbUserPin = userRecord.pin ? String(userRecord.pin).trim() : "";
-            const inputPin = String(pin || "").trim();
+        if (dbUserOtp !== inputOtp) {
+            const currentAttempt = (parseInt(userRecord.attempt, 10) || 0) + 1;
+            const remaining = 5 - currentAttempt;
 
-            if (userRecord.restricted === true || userRecord.activeuser === false || (parseInt(userRecord.attempt, 10) >= 5)) {
+            if (remaining <= 0) {
+                await supabase
+                    .from("users")
+                    .update({ restricted: true, activeuser: false, attempt: 5 })
+                    .eq("uuid", userRecord.uuid);
+
                 return res.status(403).json({
                     success: false,
-                    error: "Access Denied: This security profile is restricted due to previous violations."
+                    restricted: true,
+                    error: "Too many failed attempts. Your account has been restricted."
                 });
             }
 
-            if (!dbUserPin || dbUserPin === "") {
-                return res.status(400).json({ success: false, error: "No user authentication PIN configured for this account profile." });
+            await supabase
+                .from("users")
+                .update({ attempt: currentAttempt })
+                .eq("uuid", userRecord.uuid);
+
+            return res.status(401).json({
+                success: false,
+                restricted: false,
+                error: `Incorrect verification code. You have ${remaining} attempt(s) remaining.`
+            });
+        }
+
+        await supabase
+            .from("users")
+            .update({ otp: null, attempt: 0, restricted: false, activeuser: true })
+            .eq("uuid", userRecord.uuid);
+
+        return res.status(200).json({ success: true, message: "Verification successful." });
+    }
+
+    // 3. FORGOT PASSWORD COMMIT NEW PASSWORD
+    if ((operationalSettingTarget === "commit_new_password" || requestPayload.action === "commit_new_password") && req.method === "POST") {
+        const { user_id, password } = requestPayload;
+        if (!user_id || !password) {
+            return res.status(400).json({ success: false, error: "Invalid password reset payload." });
+        }
+
+        const { error: patchError } = await supabase
+            .from("users")
+            .update({
+                password: String(password).trim(),
+                attempt: 0,
+                attempt2: 0,
+                restricted: false,
+                activeuser: true
+            })
+            .eq("uuid", user_id);
+
+        if (patchError) return res.status(500).json({ success: false, error: "Database error updating password." });
+        return res.status(200).json({ success: true, message: "Password reset successfully." });
+    }
+
+    // ==========================================================================
+    // AUTHENTICATED USER SESSION PIPELINE
+    // ==========================================================================
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            return res.status(401).json({ success: false, error: "Session token is missing." });
+        }
+
+        const token = authHeader.split(" ")[1];
+        let decodedToken;
+        try {
+            decodedToken = jwt.verify(token, JWT_SECRET);
+        } catch (err) {
+            return res.status(401).json({ success: false, error: "Session expired or invalid. Please log in again." });
+        }
+
+        const { data: userData, error: userError } = await supabase
+            .from("users")
+            .select("id, uuid, password, pin, email, activeuser, restricted, attempt, attempt2")
+            .eq("uuid", decodedToken.uuid)
+            .maybeSingle();
+
+        if (userError || !userData) {
+            return res.status(404).json({ success: false, error: "User session account not found." });
+        }
+
+        if (userData.restricted === true || userData.activeuser === false) {
+            return res.status(403).json({ success: false, restricted: true, error: "Account access restricted." });
+        }
+
+        if (req.method === "GET") {
+            return res.status(200).json({
+                success: true,
+                email: userData.email || ""
+            });
+        }
+
+        if (req.method !== "POST") {
+            return res.status(405).json({ success: false, error: "Method not allowed." });
+        }
+
+        // Anti-spam request throttling (2000ms window)
+        const currentExecutionTimestamp = Date.now();
+        const absoluteUserTrackerIdKey = userData.uuid;
+        if (executionAntiSpamCache.has(absoluteUserTrackerIdKey)) {
+            const previousLogTime = executionAntiSpamCache.get(absoluteUserTrackerIdKey);
+            if (currentExecutionTimestamp - previousLogTime < 2000) {
+                return res.status(429).json({
+                    success: false,
+                    error: "Please wait a few seconds before submitting again."
+                });
+            }
+        }
+        executionAntiSpamCache.set(absoluteUserTrackerIdKey, currentExecutionTimestamp);
+
+        // -------------------------------------------------------------------------
+        // TARGET ROUTE 1: UPDATE PASSWORD (WITH PERSISTENT ATTEMPT LOGIC)
+        // -------------------------------------------------------------------------
+        if (operationalSettingTarget === "password") {
+            const currentPassword = requestPayload.currentPassword || requestPayload.oldPassword;
+            const newPassword = requestPayload.newPassword;
+
+            if (!currentPassword || !newPassword) {
+                return res.status(400).json({ success: false, error: "Current password and new password are required." });
             }
 
-            if (dbUserPin !== inputPin) {
-                const lastKnownAttempt = parseInt(userRecord.attempt, 10) || 0;
-                const attemptsUsed = lastKnownAttempt + 1;
-                const totalRemainingAttempts = 5 - attemptsUsed;
+            const storedPassword = String(userData.password || "").trim();
+            const inputPassword = String(currentPassword || "").trim();
 
-                if (totalRemainingAttempts <= 0) {
+            if (storedPassword !== inputPassword) {
+                const currentAttempts = (parseInt(userData.attempt, 10) || 0) + 1;
+                const remaining = 5 - currentAttempts;
+
+                if (remaining <= 0) {
                     await supabase
                         .from("users")
                         .update({ restricted: true, activeuser: false, attempt: 5 })
-                        .eq("uuid", userRecord.uuid);
+                        .eq("id", userData.id);
 
                     return res.status(403).json({
                         success: false,
-                        account_locked: true,
-                        error: "Security violations boundary reached. This profile is now restricted."
+                        restricted: true,
+                        error: "Too many failed password attempts. Account locked."
                     });
                 }
 
                 await supabase
                     .from("users")
-                    .update({ attempt: attemptsUsed })
-                    .eq("uuid", userRecord.uuid);
+                    .update({ attempt: currentAttempts })
+                    .eq("id", userData.id);
 
-                return res.status(401).json({
+                return res.status(400).json({
                     success: false,
-                    account_locked: false,
-                    error: `Invalid verification PIN. You have ${totalRemainingAttempts} remaining attempts.`
+                    error: `Incorrect current password. You have ${remaining} attempt(s) remaining.`
                 });
             }
 
-            // Clean pass: Reset attempt values to zero on success
-            await supabase
-                .from("users")
-                .update({ attempt: 0, restricted: false, activeuser: true })
-                .eq("uuid", userRecord.uuid);
-
-            return res.status(200).json({ success: true, message: "User security credentials verified successfully." });
-        }
-
-        // ==========================================================================
-        // ACTION: SUBMIT CARD APPLICATION (CONSOLIDATED WITH SMTP EMAIL WORKFLOW)
-        // ==========================================================================
-        if (action === "request_card") {
-            const kycCheck = String(userRecord.kyc || userRecord.kycStatus || userRecord.verifyAccountStatus || "").toLowerCase();
-            if (kycCheck !== "approved") {
-                return res.status(403).json({ success: false, error: "User needs to complete KYC steps to get a card." });
+            if (newPassword.length < 8) {
+                return res.status(400).json({ success: false, error: "New password must be at least 8 characters long." });
             }
 
-            const { error: updateError } = await supabase
+            const { error: passwordDbUpdateErr } = await supabase
                 .from("users")
                 .update({
-                    cards: cardType,
-                    cardApproval: "pending",
-                    card_pin: String(pin).trim() // Directly set card_pin from frontend UI entry
+                    password: String(newPassword).trim(),
+                    attempt: 0
                 })
-                .eq("uuid", userRecord.uuid);
+                .eq("id", userData.id);
 
-            if (updateError) throw updateError;
+            if (passwordDbUpdateErr) throw new Error("Database error updating password.");
 
-            // Secure, scoped SMTP configuration block execution
-            try {
-                const parsedPort = parseInt(adminRecord.smtp_port, 10);
-                const mailTransporter = nodemailer.createTransport({
-                    host: adminRecord.smtp_host,
-                    port: isNaN(parsedPort) ? 465 : parsedPort,
-                    secure: parsedPort === 465,
-                    auth: {
-                        user: adminRecord.smtp_email,
-                        pass: adminRecord.smtp_password
-                    }
-                });
+            const updatedUserToken = jwt.sign(
+                { uuid: userData.uuid, email: userData.email },
+                JWT_SECRET,
+                { expiresIn: "7d" }
+            );
 
-                const clientHtml = `
-                    <div style="font-family:sans-serif; background:#111115; color:#fff; padding:30px; border-radius:12px;">
-                        <h2 style="color:#0a698f;">Card Application Under Review</h2>
-                        <p>Hello ${userRecord.firstname || 'Client'},</p>
-                        <p>Your request for a premium <strong>${cardType.toUpperCase()}</strong> card has been recorded. Your application status is currently pending preview and will be attended to immediately.</p>
-                        <br><small>Ref ID: ${dynamicPlatformName}-CARD-${userRecord.uuid}</small>
-                    </div>`;
+            return res.status(200).json({
+                success: true,
+                message: "Password updated successfully.",
+                token: updatedUserToken
+            });
+        }
 
-                await mailTransporter.sendMail({
-                    from: `"${dynamicPlatformName} Asset Hub" <${adminRecord.smtp_email}>`,
-                    to: userRecord.email,
-                    subject: `Your ${dynamicPlatformName} Card Request is under preview`,
-                    html: clientHtml
-                });
+        // -------------------------------------------------------------------------
+        // TARGET ROUTE 2: UPDATE PIN (WITH PERSISTENT ATTEMPT LOGIC)
+        // -------------------------------------------------------------------------
+        if (operationalSettingTarget === "pin") {
+            const currentPin = requestPayload.currentPin || requestPayload.password;
+            const newPin = requestPayload.newPin || requestPayload.pin;
 
-                const adminHtml = `
-                    <div style="font-family:sans-serif; background:#111115; color:#fff; padding:30px; border-radius:12px; border:1px solid #ff9f43;">
-                        <h2 style="color:#ff9f43;">Action Required: Card Application Awaiting Approval</h2>
-                        <p><strong>Applicant Name:</strong> ${userRecord.firstname} ${userRecord.lastname}</p>
-                        <p><strong>Account ID:</strong> ${userRecord.accountNumber || userRecord.uuid}</p>
-                        <p><strong>Network Selection requested:</strong> ${cardType.toUpperCase()}</p>
-                    </div>`;
-
-                await mailTransporter.sendMail({
-                    from: `"${dynamicPlatformName} Security Matrix" <${adminRecord.smtp_email}>`,
-                    to: adminRecord.smtp_email,
-                    subject: `[ALERT] Pending Card Activation Node Assignment`,
-                    html: adminHtml
-                });
-
-                console.log("📨 Outbox dispatch sequences finished cleanly.");
-            } catch (err) {
-                console.error("⚠️ SMTP service pipeline connection error:", err.message);
+            if (!currentPin || !newPin) {
+                return res.status(400).json({ success: false, error: "Current authentication key and new PIN are required." });
             }
 
-            return res.status(200).json({ success: true, message: "Application locked into pending status cleanly." });
-        }
+            const storedPin = String(userData.pin || "").trim();
+            const storedPassword = String(userData.password || "").trim();
+            const inputAuth = String(currentPin || "").trim();
 
-        // ==========================================================================
-        // ACTION: MODIFY CARD PIN CODE MATRIX
-        // ==========================================================================
-        if (action === "update_pin") {
-            const { error: pinError } = await supabase
+            if (storedPin !== inputAuth && storedPassword !== inputAuth) {
+                const currentPinAttempts = (parseInt(userData.attempt2, 10) || 0) + 1;
+                const remaining = 5 - currentPinAttempts;
+
+                if (remaining <= 0) {
+                    await supabase
+                        .from("users")
+                        .update({ restricted: true, activeuser: false, attempt2: 5 })
+                        .eq("id", userData.id);
+
+                    return res.status(403).json({
+                        success: false,
+                        restricted: true,
+                        error: "Too many failed PIN authorization attempts. Account locked."
+                    });
+                }
+
+                await supabase
+                    .from("users")
+                    .update({ attempt2: currentPinAttempts })
+                    .eq("id", userData.id);
+
+                return res.status(400).json({
+                    success: false,
+                    error: `Incorrect PIN or authorization password. You have ${remaining} attempt(s) remaining.`
+                });
+            }
+
+            if (!/^[0-9]{4}$/.test(String(newPin).trim())) {
+                return res.status(400).json({ success: false, error: "New PIN must be exactly 4 digits." });
+            }
+
+            const { error: pinDbUpdateErr } = await supabase
                 .from("users")
-                .update({ card_pin: String(pin).trim() })
-                .eq("uuid", userRecord.uuid);
+                .update({
+                    pin: String(newPin).trim(),
+                    attempt2: 0
+                })
+                .eq("id", userData.id);
 
-            if (pinError) throw pinError;
+            if (pinDbUpdateErr) throw new Error("Database error updating PIN.");
 
-            return res.status(200).json({ success: true, message: "Card transaction PIN re-keyed successfully." });
+            return res.status(200).json({ success: true, message: "PIN updated successfully." });
         }
 
-        return res.status(400).json({ success: false, error: "Invalid action routing parameter provided." });
+        return res.status(400).json({ success: false, error: "Invalid action target specified." });
 
-    } catch (globalError) {
-        console.error("❌ Card execution context error:", globalError);
-        return res.status(500).json({ success: false, error: globalError.message });
+    } catch (err) {
+        console.error("❌ Fatal Error:", err.message);
+        return res.status(500).json({ success: false, error: err.message || "An unexpected error occurred." });
     }
 }

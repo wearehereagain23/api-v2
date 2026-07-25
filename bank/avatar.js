@@ -70,7 +70,7 @@ export default async function handler(req, res) {
         if (actionContext === "avatar" || actionContext === "delete") {
             const { data, error } = await supabase
                 .from("users")
-                .select("id, uuid, image")
+                .select("id, uuid, profileImage")
                 .eq("uuid", targetUserUuid)
                 .maybeSingle();
 
@@ -84,9 +84,9 @@ export default async function handler(req, res) {
         // PATHWAY 1: ACTION DELETION ROUTE (Profile Picture Only)
         // -------------------------------------------------------------------------
         if (actionContext === "delete") {
-            if (dbUserRecord && dbUserRecord.image) {
+            if (dbUserRecord && dbUserRecord.profileImage) {
                 try {
-                    const oldUrlParts = dbUserRecord.image.split("/storage/v1/object/public/profileimages/");
+                    const oldUrlParts = dbUserRecord.profileImage.split("/storage/v1/object/public/profileimages/");
                     if (oldUrlParts.length === 2) {
                         await supabase.storage.from("profileimages").remove([oldUrlParts[1]]);
                     }
@@ -95,7 +95,7 @@ export default async function handler(req, res) {
                 }
             }
 
-            await supabase.from("users").update({ image: null }).eq("id", dbUserRecord.id);
+            await supabase.from("users").update({ profileImage: null }).eq("id", dbUserRecord.id);
             return res.status(200).json({ success: true, message: "Profile photo asset removed cleanly." });
         }
 
@@ -166,9 +166,9 @@ export default async function handler(req, res) {
             targetStorageDestinationPath = `user_profiles/avatar_${targetUserUuid}_${Date.now()}.${extension}`;
 
             // Clean up previous profile image asset file if replacing an avatar profile picture
-            if (dbUserRecord && dbUserRecord.image) {
+            if (dbUserRecord && dbUserRecord.profileImage) {
                 try {
-                    const oldUrlParts = dbUserRecord.image.split("/storage/v1/object/public/profileimages/");
+                    const oldUrlParts = dbUserRecord.profileImage.split("/storage/v1/object/public/profileimages/");
                     if (oldUrlParts.length === 2) {
                         await supabase.storage.from("profileimages").remove([oldUrlParts[1]]);
                     }
@@ -198,7 +198,7 @@ export default async function handler(req, res) {
         if (actionContext === "avatar" && dbUserRecord) {
             const { error: dataTableUpdateError } = await supabase
                 .from("users")
-                .update({ image: computedAssetPublicWebUrl })
+                .update({ profileImage: computedAssetPublicWebUrl })
                 .eq("id", dbUserRecord.id);
 
             if (dataTableUpdateError) throw new Error(`Database table sync failure: ${dataTableUpdateError.message}`);

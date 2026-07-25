@@ -13,8 +13,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { transport: ws }
 });
 
-// Beautiful CSS-Only Upgrade of the Exact Working Template
-function generateReceiptHtml({
+/**
+ * ANTI-SPAM OPTIMIZED TRANSACTIONAL HTML TEMPLATE
+ * Designed for maximum deliverability across Gmail, Outlook, Yahoo, and Apple Mail.
+ */
+function generateAntiSpamHtml({
+  platformName,
   recipientName,
   transactionType, // "Debit" or "Credit"
   amountText,
@@ -22,51 +26,113 @@ function generateReceiptHtml({
   partyName,
   balanceText,
   dateString,
-  // Currency Conversion Parameters (Optional)
   isCrossCurrency = false,
   exchangeRateText = "",
   convertedAmountText = ""
 }) {
   const isCredit = transactionType.toLowerCase() === "credit";
-  const amountColor = isCredit ? "#14a24a" : "#dc2626"; // Vibrant Emerald Green vs Crimson Red
+  const amountColor = isCredit ? "#0f766e" : "#b91c1c"; // Darker green/red pass spam filter contrast checks
 
-  return `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 30px auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03); overflow: hidden;">
-        <div style="background: #4b5563; padding: 24px 20px; color: #ffffff; font-size: 18px; font-weight: bold; letter-spacing: -0.3px;">
-            Transaction Notification
-        </div>
-        <div style="padding: 24px; color: #334155; line-height: 1.6; font-size: 14px;">
-            <p style="margin-top: 0;">Hello ${recipientName},</p>
-            <p style="color: #64748b;">We are notifying you of a recent transaction on your account profile summary details.</p>
-            
-            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
-            
-            <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Type:</td><td style="text-align: right; padding: 10px 0;"><strong>${transactionType} Alert</strong></td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Amount:</td><td style="text-align: right; padding: 10px 0; font-weight: bold; color: ${amountColor}; font-size: 15px;">${amountText}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Description:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${descriptionText}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Party:</td><td style="text-align: right; padding: 10px 0; font-weight: 600; color: #1e293b;">${partyName}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Balance:</td><td style="text-align: right; padding: 10px 0; font-weight: bold; color: #0f172a;">${balanceText}</td></tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 10px 0; color: #64748b; font-weight: 500;">Date:</td><td style="text-align: right; padding: 10px 0; color: #334155;">${dateString}</td></tr>
-                
-                <!-- Beautiful Currency Conversion Row (Only Displays on Multi-Currency Transactions) -->
-                ${isCrossCurrency ? `
-                <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;">
-                    <td style="padding: 10px 8px; color: #0284c7; font-weight: 600; font-size: 13px;">Conversion details:</td>
-                    <td style="text-align: right; padding: 10px 8px; font-size: 13px; color: #334155;">
-                        <span style="display: block; font-weight: bold; color: #0f172a;">${convertedAmountText}</span>
-                        <span style="font-size: 11px; color: #64748b;">Rate: ${exchangeRateText}</span>
-                    </td>
-                </tr>
-                ` : ""}
-            </table>
-            
-            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
-            
-            <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0; text-align: center;">If you did not authorize this, please contact support services instantly.</p>
-        </div>
-    </div>
-  `;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transaction Summary</title>
+</head>
+<body style="margin: 0; padding: 20px 0; background-color: #f4f5f7; font-family: Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f4f5f7;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 520px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; margin: 20px auto;">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 24px 24px 12px 24px; border-bottom: 2px solid #2563eb;">
+                            <h2 style="margin: 0; color: #1e293b; font-size: 20px; font-weight: bold; font-family: Arial, sans-serif;">${platformName}</h2>
+                        </td>
+                    </tr>
+                    <!-- Body -->
+                    <tr>
+                        <td style="padding: 24px; color: #334155; font-size: 14px; line-height: 1.5;">
+                            <p style="margin-top: 0; margin-bottom: 16px;">Dear ${recipientName},</p>
+                            <p style="margin-top: 0; margin-bottom: 20px; color: #475569;">A recent transaction has processed on your account. Below are the details for your records:</p>
+                            
+                            <!-- Detail Card -->
+                            <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 20px;">
+                                <tr>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px;">Type</td>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #1e293b; font-weight: bold; font-size: 13px;">${transactionType}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px;">Amount</td>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; text-align: right; color: ${amountColor}; font-weight: bold; font-size: 15px;">${amountText}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px;">Description</td>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155; font-size: 13px;">${descriptionText || "N/A"}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px;">${isCredit ? "Sender" : "Recipient"}</td>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #1e293b; font-weight: 600; font-size: 13px;">${partyName}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px;">Available Balance</td>
+                                    <td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #0f172a; font-weight: bold; font-size: 13px;">${balanceText}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 12px 16px; ${isCrossCurrency ? "border-bottom: 1px solid #e2e8f0;" : ""} color: #64748b; font-size: 13px;">Date</td>
+                                    <td style="padding: 12px 16px; ${isCrossCurrency ? "border-bottom: 1px solid #e2e8f0;" : ""} text-align: right; color: #334155; font-size: 13px;">${dateString}</td>
+                                </tr>
+                                ${isCrossCurrency ? `
+                                <tr>
+                                    <td style="padding: 12px 16px; color: #0284c7; font-size: 12px; font-weight: 600;">Conversion Details</td>
+                                    <td style="padding: 12px 16px; text-align: right; color: #334155; font-size: 12px;">
+                                        <strong>${convertedAmountText}</strong><br>
+                                        <span style="color: #64748b;">Rate: ${exchangeRateText}</span>
+                                    </td>
+                                </tr>
+                                ` : ""}
+                            </table>
+
+                            <p style="margin: 0; font-size: 12px; color: #64748b;">Thank you for banking with us.</p>
+                        </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 16px 24px; background-color: #f1f5f9; border-top: 1px solid #e2e8f0; text-align: center; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
+                            <p style="margin: 0; font-size: 11px; color: #94a3b8;">This is an automated system receipt. Please do not reply directly to this email.</p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>`;
+}
+
+/**
+ * PLAIN TEXT FALLBACK GENERATOR
+ * Crucial for proving to inbox filters that this is a legitimate message.
+ */
+function generateAntiSpamText({ platformName, recipientName, transactionType, amountText, descriptionText, partyName, balanceText, dateString }) {
+  return `${platformName} - Transaction Statement
+
+Hello ${recipientName},
+
+A transaction has processed on your account. Here are the details:
+
+- Type: ${transactionType}
+- Amount: ${amountText}
+- Description: ${descriptionText || "N/A"}
+- ${transactionType.toLowerCase() === "credit" ? "Sender" : "Recipient"}: ${partyName}
+- Available Balance: ${balanceText}
+- Date: ${dateString}
+
+Thank you for banking with us.
+
+--
+${platformName} Automated Services`;
 }
 
 export default async function handler(req, res) {
@@ -95,7 +161,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ success: false, error: "Unauthorized Identity verification." });
     }
 
-    const { accountNumber, amount, balanceSource, signature, isPreview, action } = req.body;
+    const { accountNumber, amount, balanceSource, signature, isPreview, action, description } = req.body;
 
     if (action === "send_debit_email") {
       return res.status(200).json({ success: true, message: "Emails already handled inside transaction lifecycle." });
@@ -141,7 +207,7 @@ export default async function handler(req, res) {
     }
 
     const adminConfig = adminRes.data || {};
-    const platformLabel = adminConfig.website_name || "assistin.online";
+    const platformLabel = adminConfig.website_name || "Assistin";
 
     const senderSymbol = String(senderData.currency || "$").trim();
     const recipientSymbol = String(recipientData.currency || "$").trim();
@@ -232,7 +298,7 @@ export default async function handler(req, res) {
         status: "Successful",
         withdrawFrom: uiWithdrawLabel,
         name: receiverFullName,
-        description: `Local transfer issued to ${receiverFullName}`,
+        description: description,
         transactionType: "Debit",
         uuid: senderData.uuid,
         signature: signature,
@@ -245,7 +311,7 @@ export default async function handler(req, res) {
         status: "Successful",
         withdrawFrom: "account balance",
         name: senderFullName,
-        description: `Local funds deposited by ${senderFullName}`,
+        description: description,
         transactionType: "Credit",
         uuid: recipientData.uuid,
         signature: signature,
@@ -264,7 +330,7 @@ export default async function handler(req, res) {
     ]);
 
     // ========================================================
-    // SMTP BROADCAST (Nodemailer Engine Restored)
+    // OPTIMIZED INBOX-FRIENDLY SMTP BROADCAST ENGINE
     // ========================================================
     if (adminConfig.smtp_host && adminConfig.smtp_email && adminConfig.smtp_password) {
       try {
@@ -278,69 +344,61 @@ export default async function handler(req, res) {
           }
         });
 
-        const senderAddressEmail = adminConfig.smtp_email.trim();
+        const smtpUserEmail = adminConfig.smtp_email.trim();
 
-        // Dynamic "no-reply" address to prevent users from replying to receipts
-        const noReplyEmail = `no-reply@${platformLabel}`;
-
-        // DEBIT RECEIPT (SENDER EMAIL) - Shows total deduction including tax
-        const debitHtml = generateReceiptHtml({
-          recipientName: senderData.firstname || "User",
+        // 1. Debit Packet (Sender)
+        const debitData = {
+          platformName: platformLabel,
+          recipientName: senderData.firstname || "Valued Customer",
           transactionType: "Debit",
-          amountText: `-${senderSymbol}${totalSenderDeduction.toFixed(2)}`, // Updated to show total deduction
-          descriptionText: `Local transfer issued to ${receiverFullName}`,
+          amountText: `-${senderSymbol}${totalSenderDeduction.toFixed(2)}`,
+          descriptionText: description,
           partyName: receiverFullName,
           balanceText: `${senderSymbol}${rawNewSenderBal.toFixed(2)}`,
           dateString: formattedDateString,
-          // Conversion configuration
           isCrossCurrency: !currenciesMatch,
           exchangeRateText: `1 ${senderSymbol} = ${computationalExchangeRate.toFixed(4)} ${recipientSymbol}`,
           convertedAmountText: `${recipientSymbol}${recipientCreditAmount.toFixed(2)}`
-        });
+        };
 
-        // CREDIT RECEIPT (RECIPIENT EMAIL)
-        const creditHtml = generateReceiptHtml({
-          recipientName: recipientData.firstname || "User",
+        // 2. Credit Packet (Recipient)
+        const creditData = {
+          platformName: platformLabel,
+          recipientName: recipientData.firstname || "Valued Customer",
           transactionType: "Credit",
           amountText: `+${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
-          descriptionText: `Local funds deposited by ${senderFullName}`,
+          descriptionText: description,
           partyName: senderFullName,
           balanceText: `${recipientSymbol}${rawNewRecipientBal.toFixed(2)}`,
           dateString: formattedDateString,
-          // Conversion configuration
           isCrossCurrency: !currenciesMatch,
           exchangeRateText: `1 ${senderSymbol} = ${computationalExchangeRate.toFixed(4)} ${recipientSymbol}`,
           convertedAmountText: `${senderSymbol}${baseAmount.toFixed(2)}`
-        });
+        };
 
         await Promise.all([
+          // Sender Mail
           mailTransporter.sendMail({
-            from: `"Notification Center" <${senderAddressEmail}>`,
+            from: `"${platformLabel}" <${smtpUserEmail}>`, // Match sender exactly to SMTP domain
             to: senderData.email.trim(),
-            replyTo: `"No-Reply" <${noReplyEmail}>`, // Blocked from reply
-            subject: `Transaction Alert: Debit of ${senderSymbol}${totalSenderDeduction.toFixed(2)}`,
-            html: debitHtml,
-            headers: {
-              "MIME-Version": "1.0",
-              "X-Mailer": "Nodemailer"
-            }
+            subject: `Transaction Receipt: ${senderSymbol}${totalSenderDeduction.toFixed(2)} Debit`,
+            text: generateAntiSpamText(debitData),
+            html: generateAntiSpamHtml(debitData)
           }),
+          // Recipient Mail
           mailTransporter.sendMail({
-            from: `"Notification Center" <${senderAddressEmail}>`,
+            from: `"${platformLabel}" <${smtpUserEmail}>`,
             to: recipientData.email.trim(),
-            replyTo: `"No-Reply" <${noReplyEmail}>`, // Blocked from reply
-            subject: `Transaction Alert: Credit of ${recipientSymbol}${recipientCreditAmount.toFixed(2)}`,
-            html: creditHtml,
-            headers: {
-              "MIME-Version": "1.0",
-              "X-Mailer": "Nodemailer"
-            }
+            subject: `Transaction Receipt: ${recipientSymbol}${recipientCreditAmount.toFixed(2)} Credit`,
+            text: generateAntiSpamText(creditData),
+            html: generateAntiSpamHtml(creditData)
           })
         ]);
-        console.log("📨 Symmetrical inbox-friendly receipts dispatched successfully via Nodemailer.");
+
+        console.log("📨 Deliverability-optimized email receipts dispatched successfully.");
 
       } catch (nodemailerErr) {
-        console.warn("⚠️ SMTP Dynamic dispatch failed. Trace details:", nodemailerErr.message);
+        console.warn("⚠️ SMTP Dispatch failed. Trace details:", nodemailerErr.message);
       }
     }
 

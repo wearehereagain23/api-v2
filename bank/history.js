@@ -1,87 +1,101 @@
 import { createClient } from "@supabase/supabase-js";
 import jwt from "jsonwebtoken";
-import ws from "ws";
+import ws from "ws"; // Embedded Node.js WebSocket layer
 
+// 1. ENVIRONMENT PROPERTIES SCHEMATICS
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const JWT_SECRET = process.env.JWT_SECRET;
 
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !JWT_SECRET) {
+    throw new Error("CRITICAL CONFIGURATION ERROR: Environment token parameter configurations are unassigned inside properties.");
+}
+
+// Fixed client initialization incorporating ws options
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
     realtime: { transport: ws }
 });
 
-export default async function handler(req, res) {
-    // Setup CORS structures
+export default async function historyHandler(req, res) {
+    // A. CORS & MULTI-METHOD CONTROL STRUCTURES
     const requestOrigin = req.headers.origin;
-    if (requestOrigin) {
-        res.setHeader("Access-Control-Allow-Origin", requestOrigin);
-    }
-
-    // 2. Allow all HTTP methods your handlers use
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-
-    // 3. Explicitly allow all your specific custom app headers
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Action, X-Action-Phase, X-Transaction-Pin, X-User-UUID, X-Setting-Target, x-setting-target");
-
-    // 4. Keep your credentials authentication layer active
+    if (requestOrigin) res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Access-Control-Allow-Credentials", "true");
 
-    // Handle preflight options request immediately
-    if (req.method === "OPTIONS") {
-        return res.status(200).end();
+    if (req.method === "OPTIONS") return res.status(200).end();
+    if (req.method !== "GET") return res.status(405).json({ success: false, error: "Method blocked." });
+
+    // B. AUTHORIZATION & SESSION TOKEN VERIFICATION MATRIX
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ success: false, error: "Access denied. Token missing." });
     }
 
-    // UPDATED: Changed from !== "POST" to !== "GET" to process front-end queries seamlessly on Vercel
-    if (req.method !== "GET") {
-        return res.status(405).json({ success: false, error: "Method blocked." });
+    const token = authHeader.split(" ")[1];
+    let decodedUser;
+    try {
+        decodedUser = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+        return res.status(403).json({ success: false, error: "Session token expired or corrupted." });
+    }
+
+    const userUuid = decodedUser.uuid;
+    const signature = decodedUser.signature;
+
+    if (!userUuid || !signature) {
+        return res.status(400).json({ success: false, error: "Token claim configurations are structural nulls." });
     }
 
     try {
-        // Validate authentication pipeline headers
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith("Bearer ")) {
-            return res.status(401).json({ success: false, error: "Access credentials reference missing." });
-        }
-
-        const token = authHeader.split(" ")[1];
-        let decodedToken;
-        try {
-            decodedToken = jwt.verify(token, JWT_SECRET);
-        } catch (jwtErr) {
-            return res.status(401).json({ success: false, error: "Operational user session session expired." });
-        }
-
-        // Step 1: Validate active user account context mapping matches
-        const { data: userData, error: userError } = await supabase
-            .from("users")
-            .select("uuid")
-            .eq("uuid", decodedToken.uuid)
-            .maybeSingle();
-
-        if (userError || !userData) {
-            return res.status(444).json({ success: false, error: "Security context account mapping anomaly detected." });
-        }
-
-        // Step 2: Query historical transaction logs matching the owner's explicit uuid pointer string
-        const { data: historyLogs, error: historyError } = await supabase
+        // C. RETRIEVE ISOLATED HISTORICAL STREAM RECOGNIZING SIGNATURE BOUNDS
+        const { data: historyRecords, error: historyDbError } = await supabase
             .from("history")
             .select("*")
-            .eq("uuid", userData.uuid)
-            .order("id", { ascending: false }); // Sorts by primary sequence id to guarantee newest item matches are listed first
+            .eq("uuid", userUuid)
+            .eq("signature", signature)
+            .order("id", { ascending: false });
 
-        if (historyError) {
-            throw new Error(historyError.message);
+        if (historyDbError) {
+            throw new Error(`Supabase infrastructure pipeline failure: ${historyDbError.message}`);
         }
+
+        // D. TRANSLATE DATA SCHEMAS SAFELY TO MATCH FRONTEND COMPATIBILITY MATRIX
+        const formattedData = (historyRecords || []).map(record => {
+            let amountVal = parseFloat(record.amount || 0);
+
+            // Adjust sign if transactionType is explicitly mapped to 'Debit' but arrives unsigned
+            if (String(record.transactionType).toLowerCase().trim() === 'debit' && amountVal > 0) {
+                amountVal = -amountVal;
+            }
+
+            return {
+                id: record.id,
+                uuid: record.uuid,
+                signature: record.signature,
+                name: record.name || "",
+                description: record.description || "System Allocation Transfer",
+                amount: amountVal,
+                status: record.status || "success",
+                date: record.date || "",
+                withdrawFrom: record.withdrawFrom || "",
+                bankName: record.bankName || "",
+                created_at: record.created_at
+            };
+        });
 
         return res.status(200).json({
             success: true,
-            message: "Ledger historical records extracted successfully.",
-            data: historyLogs || []
+            data: formattedData
         });
 
-    } catch (err) {
-        console.error("❌ History Root Engine Processing Anomaly:", err.message);
-        return res.status(500).json({ success: false, error: "Internal ledger processing server node layout failure exception." });
+    } catch (globalFaultException) {
+        console.error("❌ Global transaction history engine failure:", globalFaultException);
+        return res.status(500).json({
+            success: false,
+            error: globalFaultException.message || "Internal data ledger connection breakdown fault."
+        });
     }
 }
