@@ -9,34 +9,21 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 const VAPID_PUBLIC_KEY = process.env.PUBLIC_VAPID_KEY || process.env.VAPID_PUBLIC_KEY || "";
 const VAPID_PRIVATE_KEY = process.env.PRIVATE_VAPID_KEY || process.env.VAPID_PRIVATE_KEY || "";
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:admin@onflex.com";
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-} else {
-    console.warn("⚠️ [WebPush Warning]: VAPID keys are missing from environment variables.");
-}
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !JWT_SECRET) {
-    throw new Error("CRITICAL SYSTEM CONFIGURATION FAULT: Environment matrix variables missing.");
+    webpush.setVapidDetails("mailto:admin@onflex.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
+    auth: { persistSession: false },
     realtime: { transport: ws }
 });
 
 function applyCors(req, res) {
-    const origin = req.headers.origin;
-    if (origin) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-    } else {
-        res.setHeader("Access-Control-Allow-Origin", "*");
-    }
+    const origin = req.headers.origin || "*";
+    res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Signature, x-signature, X-User-UUID, x-user-uuid");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-signature, X-Signature");
     if (req.method === "OPTIONS") {
         res.status(200).end();
         return true;
@@ -58,33 +45,17 @@ export default async function handler(req, res) {
     try {
         decoded = jwt.verify(token, JWT_SECRET);
     } catch (jwtErr) {
-        return res.status(401).json({
-            success: false,
-            error: "Your user login session has expired or token signature is corrupt."
-        });
+        return res.status(401).json({ success: false, error: "Session token expired or invalid." });
     }
 
     try {
         const isAdmin = Boolean(decoded.adminId || decoded.role === "admin" || decoded.isAdmin);
-        const userUuid = req.query.uuid || req.body.uuid || decoded.uuid || decoded.id;
-        const userSignature = req.headers["x-signature"] || req.headers["X-Signature"] || decoded.signature;
+        const userUuid = req.body.uuid || decoded.uuid || decoded.id || decoded.adminId || "admin_root";
+        const signature = req.headers["x-signature"] || req.headers["X-Signature"] || req.body.signature || "onflex";
 
-        let signatureToFilter = userSignature;
-        if (!signatureToFilter && userUuid) {
-            const { data: userProfile } = await supabase
-                .from("users")
-                .select("signature")
-                .or(`uuid.eq.${userUuid},id.eq.${userUuid}`)
-                .maybeSingle();
-
-            if (userProfile) {
-                signatureToFilter = userProfile.signature;
-            }
-        }
-
-        // =========================================================================
-        // 1. GET NOTIFICATIONS: Filtered by signature / user UUID with Pagination
-        // =========================================================================
+        // ==========================================
+        // 1. GET NOTIFICATIONS LOGS
+        // ==========================================
         if (req.method === "GET") {
             const page = parseInt(req.query.page, 10) || 1;
             const limit = parseInt(req.query.limit, 10) || 20;
@@ -92,11 +63,8 @@ export default async function handler(req, res) {
             const toOffset = fromOffset + limit - 1;
 
             let query = supabase.from("notifications").select("*");
-
-            if (signatureToFilter) {
-                query = query.eq("signature", signatureToFilter);
-            } else if (userUuid) {
-                query = query.eq("uuid", userUuid);
+            if (signature) {
+                query = query.eq("signature", signature);
             }
 
             const { data, error } = await query
@@ -112,67 +80,121 @@ export default async function handler(req, res) {
             });
         }
 
-        // =========================================================================
-        // 2. POST: SUBSCRIBE, UNSUBSCRIBE & ADMIN NOTIFICATION DISPATCH
-        // =========================================================================
+        // ==========================================
+        // 2. POST ACTIONS
+        // ==========================================
         if (req.method === "POST") {
-            const { action, title, message, url, device_id, subscription } = req.body;
+            const { action, device_id, subscription, subscribers, title, message, url } = req.body;
+            const pushObj = subscription || subscribers;
 
-            // --- A. SUBSCRIBE DEVICE ---
-            if (action === "subscribe") {
-                if (!device_id || !subscription) {
-                    return res.status(400).json({ success: false, error: "Missing subscription details." });
+            // A. CHECK ADMIN DEVICE
+            if (action === "check_admin_device") {
+                if (!isAdmin) {
+                    return res.status(403).json({ success: false, error: "Admin clearance required." });
                 }
 
-                const targetUuid = req.body.uuid || userUuid || "1";
+                const { data: existingSubs, error: fetchErr } = await supabase
+                    .from("notification_subscribers")
+                    .select("*")
+                    .eq("signature", signature);
+
+                if (fetchErr) throw fetchErr;
+
+                if (existingSubs && existingSubs.length > 0) {
+                    const match = existingSubs.find(sub => sub.device_id === device_id);
+
+                    if (match) {
+                        return res.status(200).json({
+                            success: true,
+                            deviceMatches: true,
+                            message: "Admin device verified."
+                        });
+                    } else {
+                        // Purge outdated devices under this signature
+                        await supabase
+                            .from("notification_subscribers")
+                            .delete()
+                            .eq("signature", signature);
+
+                        return res.status(200).json({
+                            success: true,
+                            deviceMatches: false,
+                            repurged: true,
+                            message: "Older admin devices purged."
+                        });
+                    }
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    deviceMatches: false,
+                    repurged: false,
+                    message: "No registered admin device found for this signature."
+                });
+            }
+
+            // B. SUBSCRIBE DEVICE
+            if (action === "subscribe") {
+                if (!device_id || !pushObj) {
+                    return res.status(400).json({ success: false, error: "Missing device_id or subscription object." });
+                }
+
+                // If Admin, clear previous device subscriptions with this signature to maintain 1 active device
+                if (isAdmin) {
+                    await supabase
+                        .from("notification_subscribers")
+                        .delete()
+                        .eq("signature", signature);
+                }
 
                 const { error: subErr } = await supabase
                     .from("notification_subscribers")
                     .upsert({
-                        uuid: targetUuid,
+                        uuid: String(userUuid),
                         device_id: device_id,
-                        subscribers: subscription
+                        subscribers: pushObj,
+                        signature: signature
                     }, { onConflict: "device_id" });
 
                 if (subErr) throw subErr;
 
-                return res.status(200).json({ success: true, message: "Push subscription registered." });
+                return res.status(200).json({ success: true, message: "Push subscription successfully established." });
             }
 
-            // --- B. UNSUBSCRIBE DEVICE ---
+            // C. UNSUBSCRIBE DEVICE
             if (action === "unsubscribe") {
                 if (!device_id) {
-                    return res.status(400).json({ success: false, error: "Missing device identification parameter." });
+                    return res.status(400).json({ success: false, error: "Missing device_id." });
                 }
 
-                const { error: unsubErr } = await supabase
+                await supabase
                     .from("notification_subscribers")
                     .delete()
                     .eq("device_id", device_id);
 
-                if (unsubErr) throw unsubErr;
-
-                return res.status(200).json({ success: true, message: "Push subscription removed." });
+                return res.status(200).json({ success: true, message: "Subscription revoked." });
             }
 
-            // --- C. DISPATCH NOTIFICATION (ADMIN ONLY) ---
+
+            // Inside bank/notification-system.js -> action === "send"
+
             if (action === "send" || (!action && title && message)) {
                 if (!isAdmin) {
-                    return res.status(403).json({ success: false, error: "Only administrative users can trigger push notifications." });
+                    return res.status(403).json({ success: false, error: "Admin access required." });
                 }
 
-                const targetUuid = req.body.uuid || userUuid;
+                const targetUuid = String(req.body.uuid || "").trim();
                 if (!targetUuid || !title || !message) {
-                    return res.status(400).json({ success: false, error: "Target user UUID, title, and message are required." });
+                    return res.status(400).json({ success: false, error: "Target UUID, title, and message are required." });
                 }
 
-                // 1. Insert notification entry into DB inbox
+                // 1. Insert notification into inbox (Populates UI dropdown)
                 const notifPayload = {
                     uuid: targetUuid,
                     title: title,
-                    message: message
+                    message: message,
+                    signature: signature
                 };
-                if (signatureToFilter) notifPayload.signature = signatureToFilter;
 
                 const { error: dbError } = await supabase
                     .from("notifications")
@@ -180,145 +202,73 @@ export default async function handler(req, res) {
 
                 if (dbError) throw dbError;
 
-                // 2. Increment badge counter via RPC procedure if configured
-                try {
-                    await supabase.rpc("increment_notification_count", { target_uuid: targetUuid });
-                } catch (rpcErr) {
-                    console.warn("⚠️ Notification count increment RPC failed/bypassed:", rpcErr.message);
+                // 2. Fetch subscriber records using properly quoted values and signature matching
+                const rawUuid = targetUuid.replace(/^usr_/, '');
+                const altUuid = targetUuid.startsWith('usr_') ? targetUuid : `usr_${targetUuid}`;
+
+                // Clean query targeting all possible UUID variations
+                const { data: activeSubscribers, error: fetchErr } = await supabase
+                    .from("notification_subscribers")
+                    .select("device_id, subscribers, uuid, signature")
+                    .or(`uuid.eq."${targetUuid}",uuid.eq."${rawUuid}",uuid.eq."${altUuid}"`);
+
+                if (fetchErr) {
+                    console.error("❌ Error fetching subscriber devices:", fetchErr.message);
                 }
 
-                // 3. Web Push Dispatch Execution Logic
-                let pushDispatched = false;
+                console.log(`📱 [PUSH DIAGNOSTIC] Target UUID: "${targetUuid}" | Devices Found: ${activeSubscribers?.length || 0}`);
 
-                if (VAPID_PRIVATE_KEY) {
-                    console.log(`🔍 [PUSH DISPATCH] Searching devices for target UUID: "${targetUuid}"`);
+                let pushDeliveredCount = 0;
 
-                    const { data: subscribers, error: subErr } = await supabase
-                        .from("notification_subscribers")
-                        .select("device_id, subscribers")
-                        .eq("uuid", targetUuid);
+                if (activeSubscribers && activeSubscribers.length > 0) {
+                    const pushPayload = JSON.stringify({
+                        title: title,
+                        body: message,
+                        url: url || "/dashboard/index.html",
+                        icon: "/icon-512.png"
+                    });
 
-                    if (subErr) {
-                        console.error("❌ Error fetching push subscribers:", subErr.message);
-                    }
+                    for (const row of activeSubscribers) {
+                        if (row.subscribers) {
+                            try {
+                                const subObject = typeof row.subscribers === "string"
+                                    ? JSON.parse(row.subscribers)
+                                    : row.subscribers;
 
-                    console.log(`📱 Found ${subscribers?.length || 0} registered push devices for user ${targetUuid}.`);
+                                await webpush.sendNotification(subObject, pushPayload);
+                                pushDeliveredCount++;
+                                console.log(`✅ Push delivered successfully to device_id: ${row.device_id}`);
+                            } catch (pErr) {
+                                console.error(`❌ Push dispatch failed for device ${row.device_id}:`, pErr.statusCode, pErr.message);
 
-                    if (subscribers && subscribers.length > 0) {
-                        const pushPayload = JSON.stringify({
-                            title: title,
-                            body: message,
-                            url: url || "dashboard/index.html"
-                        });
-
-                        for (const row of subscribers) {
-                            if (row.subscribers) {
-                                try {
-                                    await webpush.sendNotification(row.subscribers, pushPayload);
-                                    console.log(`✅ Push notification sent successfully to device: ${row.device_id}`);
-                                    pushDispatched = true;
-                                } catch (pErr) {
-                                    console.error(`❌ Push Error for Device ${row.device_id}:`, pErr.statusCode, pErr.message);
-
-                                    // Automatic cleanup of revoked or expired subscriptions
-                                    if (pErr.statusCode === 404 || pErr.statusCode === 410) {
-                                        console.log(`🧹 Removing invalid subscription record for device: ${row.device_id}`);
-                                        await supabase
-                                            .from("notification_subscribers")
-                                            .delete()
-                                            .eq("device_id", row.device_id);
-                                    }
+                                // Automatic cleanup of revoked or expired browser tokens
+                                if (pErr.statusCode === 404 || pErr.statusCode === 410) {
+                                    await supabase
+                                        .from("notification_subscribers")
+                                        .delete()
+                                        .eq("device_id", row.device_id);
                                 }
                             }
                         }
                     }
-                } else {
-                    console.warn("⚠️ Push dispatch skipped: VAPID_PRIVATE_KEY missing from server configuration.");
                 }
 
                 return res.status(200).json({
                     success: true,
-                    message: pushDispatched
-                        ? "Notification delivered to user inbox and push devices."
-                        : "Notification saved to user inbox."
+                    message: pushDeliveredCount > 0
+                        ? `Notification delivered (${pushDeliveredCount} device alert(s) sent).`
+                        : `Notification saved to inbox (No active push devices matched for UUID: ${targetUuid}).`,
+                    deliveredCount: pushDeliveredCount
                 });
             }
 
-            return res.status(400).json({ success: false, error: "Invalid POST action command parameter." });
-        }
 
-        // =========================================================================
-        // 3. PATCH: MARK SINGLE OR ALL NOTIFICATIONS AS READ
-        // =========================================================================
-        if (req.method === "PATCH") {
-            const { id, mark_all_read } = req.body;
-
-            if (mark_all_read) {
-                let updateQuery = supabase.from("notifications").update({ read: true });
-                if (signatureToFilter) {
-                    updateQuery = updateQuery.eq("signature", signatureToFilter);
-                } else if (userUuid) {
-                    updateQuery = updateQuery.eq("uuid", userUuid);
-                }
-
-                const { error: markError } = await updateQuery;
-                if (markError) throw markError;
-
-                return res.status(200).json({ success: true, message: "All notifications marked as read." });
-            }
-
-            if (!id) {
-                return res.status(400).json({ success: false, error: "Notification ID required." });
-            }
-
-            const { data: updatedNotif, error: updateErr } = await supabase
-                .from("notifications")
-                .update({ read: true })
-                .eq("id", id)
-                .select()
-                .single();
-
-            if (updateErr) throw updateErr;
-
-            return res.status(200).json({ success: true, notification: updatedNotif });
-        }
-
-        // =========================================================================
-        // 4. DELETE: CLEAR CURRENT USER NOTIFICATIONS
-        // =========================================================================
-        if (req.method === "DELETE") {
-            const notifId = req.query.id || req.body.id;
-
-            if (notifId) {
-                const { error: singleDeleteErr } = await supabase
-                    .from("notifications")
-                    .delete()
-                    .eq("id", notifId);
-
-                if (singleDeleteErr) throw singleDeleteErr;
-                return res.status(200).json({ success: true, message: "Notification removed." });
-            }
-
-            let purgeQuery = supabase.from("notifications").delete();
-
-            if (signatureToFilter) {
-                purgeQuery = purgeQuery.eq("signature", signatureToFilter);
-            } else if (userUuid) {
-                purgeQuery = purgeQuery.eq("uuid", userUuid);
-            } else {
-                return res.status(400).json({ success: false, error: "User identity required for clearing logs." });
-            }
-
-            const { error: clearAllErr } = await purgeQuery;
-            if (clearAllErr) throw clearAllErr;
-
-            return res.status(200).json({ success: true, message: "All user notifications cleared." });
+            return res.status(400).json({ success: false, error: "Invalid action parameter supplied." });
         }
 
         return res.status(405).json({ success: false, error: "Method not allowed." });
-
     } catch (err) {
-        console.error("❌ NOTIFICATION SYSTEM FAILURE:", err);
-        return res.status(500).json({ success: false, error: err.message || "Internal server fault." });
+        console.error("❌ NOTIFICATION HANDLER EXCEPTION:", err);
+        return res.status(500).json({ success: false, error: err.message || "Internal server error." });
     }
 }

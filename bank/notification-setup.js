@@ -122,20 +122,17 @@ export default async function handler(req, res) {
                         .eq("signature", signature);
                 }
 
-                // Insert into Supabase with explicit signature column value
+                // Standard user subscription: keeps all user devices intact per signature
                 const { error: subErr } = await supabase
                     .from("notification_subscribers")
                     .upsert({
                         uuid: String(resolvedUuid),
                         device_id: device_id,
-                        subscribers: subscription,
+                        subscribers: pushObj,
                         signature: signature
                     }, { onConflict: "device_id" });
 
-                if (subErr) {
-                    console.error("❌ Supabase Upsert Error:", subErr);
-                    throw subErr;
-                }
+                if (subErr) throw subErr;
 
                 return res.status(200).json({ success: true, message: "Push subscription successfully established." });
             }
