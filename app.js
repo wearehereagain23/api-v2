@@ -193,9 +193,16 @@ app.get("/", (req, res) => {
     res.status(200).json({ status: "online", system: "Core Ledger Engine", platform: "Node-Express Continuous Matrix Instance" });
 });
 
-app.listen(PORT, () => {
-    console.log(`\n===============================================================`);
-    console.log(`🚀 CORE ENGINE RUNNING CLEANLY AT: http://localhost:${PORT}`);
-    console.log(`🛠️ TOTAL ACTIVE CONNECTED HANDLERS INTERFACED: 17`);
-    console.log(`===============================================================\n`);
-});
+
+// Only listen on port if running locally (not in Vercel Serverless environment)
+if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`\n===============================================================`);
+        console.log(`🚀 CORE ENGINE RUNNING CLEANLY AT: http://localhost:${PORT}`);
+        console.log(`🛠️ TOTAL ACTIVE CONNECTED HANDLERS INTERFACED: 17`);
+        console.log(`===============================================================\n`);
+    });
+}
+
+// CRITICAL FOR VERCEL: Export the Express app instance
+export default app;
