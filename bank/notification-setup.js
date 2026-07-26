@@ -51,14 +51,14 @@ export default async function handler(req, res) {
 
     try {
         const isAdmin = Boolean(decoded.adminId || decoded.role === "admin" || decoded.isAdmin);
-        const userUuid = decoded.uuid || decoded.id || decoded.adminId || "admin";
+        const resolvedUuid = req.body.uuid || decoded.uuid || decoded.id || decoded.adminId || "admin_root";
         const signature = req.headers["x-signature"] || req.body.signature || "onflex";
 
         if (req.method === "POST") {
             const { action, device_id, subscription, title, message, url } = req.body;
 
             // =========================================================================
-            // CHECK ADMIN DEVICE & SIGNATURE MATCH EXCLUSIVELY
+            // 1. CHECK ADMIN DEVICE & SIGNATURE MATCH EXCLUSIVELY
             // =========================================================================
             if (action === "check_admin_device") {
                 if (!isAdmin) {
@@ -83,7 +83,7 @@ export default async function handler(req, res) {
                             message: "Admin device verified."
                         });
                     } else {
-                        // Signature exists but device doesn't match -> Purge old entries for this signature
+                        // Delete older device subscriptions under this signature
                         await supabase
                             .from("notification_subscribers")
                             .delete()
@@ -107,14 +107,14 @@ export default async function handler(req, res) {
             }
 
             // =========================================================================
-            // SUBSCRIBE / UPDATE ADMIN PUSH SUBSCRIPTION
+            // 2. SUBSCRIBE / UPDATE ADMIN PUSH SUBSCRIPTION
             // =========================================================================
             if (action === "subscribe") {
                 if (!device_id || !subscription) {
-                    return res.status(400).json({ success: false, error: "Missing device or subscription details." });
+                    return res.status(400).json({ success: false, error: "Missing device_id or subscription parameters." });
                 }
 
-                // Ensure single admin entry per signature
+                // Remove existing records with this signature to ensure only ONE active admin
                 if (isAdmin) {
                     await supabase
                         .from("notification_subscribers")
@@ -122,22 +122,26 @@ export default async function handler(req, res) {
                         .eq("signature", signature);
                 }
 
+                // Insert into Supabase with explicit signature column value
                 const { error: subErr } = await supabase
                     .from("notification_subscribers")
                     .upsert({
-                        uuid: String(userUuid),
+                        uuid: String(resolvedUuid),
                         device_id: device_id,
                         subscribers: subscription,
                         signature: signature
                     }, { onConflict: "device_id" });
 
-                if (subErr) throw subErr;
+                if (subErr) {
+                    console.error("❌ Supabase Upsert Error:", subErr);
+                    throw subErr;
+                }
 
                 return res.status(200).json({ success: true, message: "Push subscription successfully established." });
             }
 
             // =========================================================================
-            // DISPATCH NOTIFICATION
+            // 3. DISPATCH NOTIFICATION
             // =========================================================================
             if (action === "send") {
                 if (!isAdmin) {
@@ -187,6 +191,7 @@ export default async function handler(req, res) {
 
         return res.status(405).json({ success: false, error: "Method not allowed." });
     } catch (err) {
-        return res.status(500).json({ success: false, error: err.message });
+        console.error("❌ Notification Server Error:", err.message);
+        return res.status(500).json({ success: false, error: err.message || "Internal server error." });
     }
 }
