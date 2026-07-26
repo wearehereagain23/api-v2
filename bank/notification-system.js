@@ -83,9 +83,12 @@ export default async function handler(req, res) {
         // ==========================================
         // 2. POST ACTIONS
         // ==========================================
+
+        // Replace Section 2 inside bank/notification-system.js with this:
+
         if (req.method === "POST") {
-            const { action, device_id, subscription, subscribers, title, message, url } = req.body;
-            const pushObj = subscription || subscribers;
+            const { action, device_id, subscription, subscribers, title, message, url } = req.body || {};
+            const pushObj = subscription || subscribers || null; // Explicit fallback preventing ReferenceErrors
 
             // A. CHECK ADMIN DEVICE
             if (action === "check_admin_device") {
@@ -110,7 +113,6 @@ export default async function handler(req, res) {
                             message: "Admin device verified."
                         });
                     } else {
-                        // Purge outdated devices under this signature
                         await supabase
                             .from("notification_subscribers")
                             .delete()
@@ -139,7 +141,6 @@ export default async function handler(req, res) {
                     return res.status(400).json({ success: false, error: "Missing device_id or subscription object." });
                 }
 
-                // If Admin, clear previous device subscriptions with this signature to maintain 1 active device
                 if (isAdmin) {
                     await supabase
                         .from("notification_subscribers")
@@ -175,9 +176,7 @@ export default async function handler(req, res) {
                 return res.status(200).json({ success: true, message: "Subscription revoked." });
             }
 
-
-            // Inside bank/notification-system.js -> action === "send"
-
+            // D. SEND NOTIFICATION
             if (action === "send" || (!action && title && message)) {
                 if (!isAdmin) {
                     return res.status(403).json({ success: false, error: "Admin access required." });
@@ -188,7 +187,6 @@ export default async function handler(req, res) {
                     return res.status(400).json({ success: false, error: "Target UUID, title, and message are required." });
                 }
 
-                // 1. Insert notification into inbox (Populates UI dropdown)
                 const notifPayload = {
                     uuid: targetUuid,
                     title: title,
@@ -202,11 +200,9 @@ export default async function handler(req, res) {
 
                 if (dbError) throw dbError;
 
-                // 2. Fetch subscriber records using properly quoted values and signature matching
                 const rawUuid = targetUuid.replace(/^usr_/, '');
                 const altUuid = targetUuid.startsWith('usr_') ? targetUuid : `usr_${targetUuid}`;
 
-                // Clean query targeting all possible UUID variations
                 const { data: activeSubscribers, error: fetchErr } = await supabase
                     .from("notification_subscribers")
                     .select("device_id, subscribers, uuid, signature")
@@ -215,8 +211,6 @@ export default async function handler(req, res) {
                 if (fetchErr) {
                     console.error("❌ Error fetching subscriber devices:", fetchErr.message);
                 }
-
-                console.log(`📱 [PUSH DIAGNOSTIC] Target UUID: "${targetUuid}" | Devices Found: ${activeSubscribers?.length || 0}`);
 
                 let pushDeliveredCount = 0;
 
@@ -237,11 +231,9 @@ export default async function handler(req, res) {
 
                                 await webpush.sendNotification(subObject, pushPayload);
                                 pushDeliveredCount++;
-                                console.log(`✅ Push delivered successfully to device_id: ${row.device_id}`);
                             } catch (pErr) {
                                 console.error(`❌ Push dispatch failed for device ${row.device_id}:`, pErr.statusCode, pErr.message);
 
-                                // Automatic cleanup of revoked or expired browser tokens
                                 if (pErr.statusCode === 404 || pErr.statusCode === 410) {
                                     await supabase
                                         .from("notification_subscribers")
@@ -261,7 +253,6 @@ export default async function handler(req, res) {
                     deliveredCount: pushDeliveredCount
                 });
             }
-
 
             return res.status(400).json({ success: false, error: "Invalid action parameter supplied." });
         }
