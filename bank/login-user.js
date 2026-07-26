@@ -56,6 +56,7 @@ async function getLocationFromIp(ip) {
     }
 
     try {
+        // Extract the first IP if multiple IPs are present in x-forwarded-for header
         const cleanIp = ip.split(",")[0].trim();
         const response = await fetch(`http://ip-api.com/json/${cleanIp}`);
 
@@ -77,9 +78,11 @@ async function sendAdminLoginNotification(req, user, signature, is2FA) {
     const dynamicPlatformName = formatPlatformName(signature);
     const { transporter, adminEmail } = await getAdminTransporter(signature);
 
+    // Capture IP address and User-Agent header
     const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "Unknown IP";
     const userAgent = req.headers['user-agent'] || "Unknown Device/Browser";
 
+    // Fetch Country and Location from IP
     const userLocation = await getLocationFromIp(rawIp);
     const is2FAStatus = is2FA ? "True" : "False";
 
@@ -176,9 +179,9 @@ export default async function loginUserHandler(req, res) {
     }
 
     try {
-        const { action = "login", email, password, signature, user_id, otp, credential_id } = req.body;
+        const { action = "login", email, password, signature, user_id, otp } = req.body;
 
-        // 1. STANDARD PASSWORD LOGIN
+        // 1. LOGIN
         if (action === "login") {
             if (!email || !password || !signature) {
                 return res.status(400).json({ success: false, error: "Please provide email, password, and signature." });
@@ -189,7 +192,7 @@ export default async function loginUserHandler(req, res) {
             const { data: user, error: fetchErr } = await supabase
                 .from("users")
                 .select(`
-                    id, uuid, firstname, lastname, email, password, restricted, activeuser, "2fa", "accountNumber", accttype, currency, biometric_credential_id
+                    id, uuid, firstname, lastname, email, password, restricted, activeuser, "2fa", "accountNumber", accttype, currency
                 `)
                 .eq("email", cleanEmail)
                 .eq("signature", signature)
@@ -256,143 +259,13 @@ export default async function loginUserHandler(req, res) {
                         lastname: user.lastname,
                         accountNumber: user["accountNumber"],
                         accttype: user.accttype,
-                        currency: user.currency,
-                        biometric_credential_id: user.biometric_credential_id
+                        currency: user.currency
                     }
                 });
             }
         }
 
-        // 2. REGISTER BIOMETRIC CREDENTIAL
-        if (action === "register_biometrics") {
-            if (!user_id || !credential_id || !signature) {
-                return res.status(400).json({ success: false, error: "Missing biometric registration details." });
-            }
-
-            const { error: updateErr } = await supabase
-                .from("users")
-                .update({ biometric_credential_id: credential_id })
-                .eq("uuid", user_id);
-
-            if (updateErr) {
-                return res.status(500).json({ success: false, error: "Failed to store biometric registration." });
-            }
-
-            return res.status(200).json({ success: true, message: "Biometrics successfully registered." });
-        }
-
-        // 3. GET BIOMETRIC AUTH CHALLENGE
-        if (action === "get_biometric_challenge") {
-            if (!email || !signature) {
-                return res.status(400).json({ success: false, error: "Email and signature are required." });
-            }
-
-            const cleanEmail = email.trim().toLowerCase();
-
-            const { data: user } = await supabase
-                .from("users")
-                .select("biometric_credential_id")
-                .eq("email", cleanEmail)
-                .eq("signature", signature)
-                .maybeSingle();
-
-            if (!user || !user.biometric_credential_id) {
-                return res.status(400).json({ success: false, error: "No biometric credentials registered for this user." });
-            }
-
-            return res.status(200).json({
-                success: true,
-                challenge: Buffer.from("onflex_sec_challenge").toString("base64"),
-                credentialId: user.biometric_credential_id
-            });
-        }
-
-        // 4. LOGIN WITH BIOMETRICS
-        if (action === "login_biometric") {
-            if (!email || !signature) {
-                return res.status(400).json({ success: false, error: "Missing biometric authentication parameters." });
-            }
-
-            const cleanEmail = email.trim().toLowerCase();
-
-            const { data: user, error: fetchErr } = await supabase
-                .from("users")
-                .select(`
-                    id, uuid, firstname, lastname, email, restricted, activeuser, "2fa", "accountNumber", accttype, currency, biometric_credential_id
-                `)
-                .eq("email", cleanEmail)
-                .eq("signature", signature)
-                .maybeSingle();
-
-            if (fetchErr || !user) {
-                return res.status(401).json({ success: false, error: "Biometric authentication failed. User account not found." });
-            }
-
-            if (user.restricted || user.activeuser === false) {
-                return res.status(403).json({ success: false, error: "Your account is currently restricted. Please contact support." });
-            }
-
-            const is2FAEnabled = user["2fa"] === true || user["2fa"] === "true";
-
-            if (is2FAEnabled) {
-                const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-                otpStore.set(user.uuid, {
-                    otp: generatedOtp,
-                    expiresAt: Date.now() + 10 * 60 * 1000
-                });
-
-                try {
-                    await sendOTPEmail(
-                        user.email,
-                        user.firstname,
-                        generatedOtp,
-                        signature,
-                        "Login Security Verification Code",
-                        "A biometric sign-in request was detected. Enter the code below to authorize access:"
-                    );
-                } catch (mailErr) {
-                    console.warn("⚠️ Biometric OTP Email Dispatch Warning:", mailErr.message);
-                }
-
-                return res.status(200).json({
-                    success: true,
-                    requires_2fa: true,
-                    message: "Biometrics verified. Security code dispatched.",
-                    user_id: user.uuid
-                });
-            } else {
-                try {
-                    await sendAdminLoginNotification(req, user, signature, false);
-                } catch (adminMailErr) {
-                    console.warn("⚠️ Admin Notification Email Warning:", adminMailErr.message);
-                }
-
-                const token = jwt.sign(
-                    { uuid: user.uuid, email: user.email, signature },
-                    JWT_SECRET,
-                    { expiresIn: "24h" }
-                );
-
-                return res.status(200).json({
-                    success: true,
-                    requires_2fa: false,
-                    message: "Biometric authentication successful.",
-                    token: token,
-                    user: {
-                        uuid: user.uuid,
-                        email: user.email,
-                        firstname: user.firstname,
-                        lastname: user.lastname,
-                        accountNumber: user["accountNumber"],
-                        accttype: user.accttype,
-                        currency: user.currency,
-                        biometric_credential_id: user.biometric_credential_id
-                    }
-                });
-            }
-        }
-
-        // 5. VERIFY LOGIN 2FA OTP
+        // 2. VERIFY LOGIN 2FA OTP
         if (action === "verify_otp") {
             if (!user_id || !otp || !signature) {
                 return res.status(400).json({ success: false, error: "Missing verification parameters." });
@@ -448,7 +321,7 @@ export default async function loginUserHandler(req, res) {
             });
         }
 
-        // 6. FORGOT PASSWORD REQUEST
+        // 3. FORGOT PASSWORD REQUEST
         if (action === "forgot_password_request") {
             if (!email || !signature) {
                 return res.status(400).json({ success: false, error: "Please enter a valid email address." });
@@ -497,7 +370,7 @@ export default async function loginUserHandler(req, res) {
             });
         }
 
-        // 7. VERIFY FORGOT PASSWORD OTP
+        // 4. VERIFY FORGOT PASSWORD OTP
         if (action === "verify_password_otp") {
             if (!user_id || !otp) {
                 return res.status(400).json({ success: false, error: "Missing verification parameters." });
@@ -520,7 +393,7 @@ export default async function loginUserHandler(req, res) {
             });
         }
 
-        // 8. COMMIT NEW PASSWORD
+        // 5. COMMIT NEW PASSWORD
         if (action === "commit_new_password") {
             if (!user_id || !password) {
                 return res.status(400).json({ success: false, error: "Please provide a valid new password." });
