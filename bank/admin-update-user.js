@@ -37,70 +37,63 @@ export default async function handler(req, res) {
         if (req.method !== "POST" && req.method !== "PUT") {
             return res.status(405).json({ success: false, error: "Method blocked." });
         }
-        jwt.verify(token, process.env.JWT_SECRET);
 
-        if (req.method !== "POST" && req.method !== "PUT") {
-            return res.status(405).json({ success: false, error: "Method blocked." });
-        }
-
-        // Destructure all full operational identity matrix fields
-        const {
-            id, uuid, accountBalance, accountTypeBalance, firstname, middlename, lastname,
-            email, password, pin, accountNumber, currency, COT, IMF, TAX, accttype,
-            address, city, country, phone, zipcode, dateOfBirth, gender, occupation,
-            kinname, tiers, tax_fee, fixedDate, block_transection, restricted,
-            transferAccess, activeuser
-        } = req.body;
-
-        const targetId = id || req.query.id;
-        const targetUuid = uuid || req.body.uuid;
+        const targetId = req.body.id || req.query.id;
+        const targetUuid = req.body.uuid || req.query.uuid;
 
         if (!targetId && !targetUuid) {
             return res.status(400).json({ success: false, error: "Target User ID or UUID is required." });
         }
 
-        // Parse boolean and numeric schema types cleanly
-        const parsed2fa = req.body["2fa"] === "true" || req.body["2fa"] === true;
-        const parsedBlockTransaction = block_transection === "true" || block_transection === true;
-        const parsedRestricted = restricted === "true" || restricted === true;
-        const parsedTransferAccess = transferAccess === "true" || transferAccess === true;
-        const parsedActiveUser = activeuser === "true" || activeuser === true;
-        const parsedTaxFee = tax_fee !== undefined && tax_fee !== null ? Number(tax_fee) : 3;
+        // Build update object dynamically to prevent overwriting missing fields with null/undefined/false
+        const updateData = {};
 
-        // Build Supabase update query context dynamically based on identifier present
-        let query = supabase.from("users").update({
-            accountBalance,
-            accountTypeBalance,
-            firstname,
-            middlename,
-            lastname,
-            email,
-            password,
-            pin,
-            accountNumber,
-            currency,
-            COT,
-            IMF,
-            TAX,
-            accttype,
-            address,
-            city,
-            country,
-            phone,
-            zipcode,
-            dateOfBirth,
-            gender,
-            occupation, // mapped correctly to database field
-            kinname,
-            tiers,
-            tax_fee: parsedTaxFee,
-            fixedDate,
-            "2fa": parsed2fa,
-            block_transection: parsedBlockTransaction,
-            restricted: parsedRestricted,
-            transferAccess: parsedTransferAccess,
-            activeuser: parsedActiveUser
+        // String & General Fields
+        const fields = [
+            "accountBalance", "accountTypeBalance", "firstname", "middlename", "lastname",
+            "email", "password", "pin", "accountNumber", "currency", "COT", "IMF", "TAX",
+            "accttype", "address", "city", "country", "phone", "zipcode", "dateOfBirth",
+            "gender", "occupation", "kinname", "tiers", "fixedDate"
+        ];
+
+        fields.forEach(field => {
+            if (req.body[field] !== undefined) {
+                updateData[field] = req.body[field];
+            }
         });
+
+        // Profile Image Fields
+        if (req.body.profileImage !== undefined) updateData.profileImage = req.body.profileImage;
+        if (req.body.image !== undefined && !updateData.profileImage) updateData.profileImage = req.body.image;
+
+        // Numeric Fields
+        if (req.body.tax_fee !== undefined && req.body.tax_fee !== null) {
+            updateData.tax_fee = Number(req.body.tax_fee);
+        }
+
+        // Boolean Fields (Only set if explicitly provided in body)
+        if (req.body["2fa"] !== undefined) {
+            updateData["2fa"] = req.body["2fa"] === "true" || req.body["2fa"] === true;
+        }
+        if (req.body.block_transection !== undefined) {
+            updateData.block_transection = req.body.block_transection === "true" || req.body.block_transection === true;
+        }
+        if (req.body.restricted !== undefined) {
+            updateData.restricted = req.body.restricted === "true" || req.body.restricted === true;
+        }
+        if (req.body.transferAccess !== undefined) {
+            updateData.transferAccess = req.body.transferAccess === "true" || req.body.transferAccess === true;
+        }
+        if (req.body.activeuser !== undefined) {
+            updateData.activeuser = req.body.activeuser === "true" || req.body.activeuser === true;
+        }
+
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ success: false, error: "No update parameters provided in request body." });
+        }
+
+        // Build Supabase update query
+        let query = supabase.from("users").update(updateData);
 
         if (targetId) {
             query = query.eq("id", targetId);
