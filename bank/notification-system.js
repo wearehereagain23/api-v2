@@ -9,10 +9,9 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 const VAPID_PUBLIC_KEY = process.env.PUBLIC_VAPID_KEY || process.env.VAPID_PUBLIC_KEY || "";
 const VAPID_PRIVATE_KEY = process.env.PRIVATE_VAPID_KEY || process.env.VAPID_PRIVATE_KEY || "";
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:admin@onflex.com";
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    webpush.setVapidDetails("mailto:admin@onflex.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -55,6 +54,8 @@ export default async function handler(req, res) {
 
         const requestUuid = String(req.query?.uuid || req.body?.uuid || decoded.uuid || decoded.id || decoded.adminId || "").trim();
         const isAdminUser = Boolean(isAdmin || requestUuid === signature || requestUuid === "1");
+
+        // Force Admin identity to match project signature instead of hardcoded numbers
         const targetUuid = isAdminUser ? signature : (requestUuid || "usr_unknown");
 
         // ==========================================
@@ -68,8 +69,8 @@ export default async function handler(req, res) {
 
             let query = supabase.from("notifications").select("*");
 
-            if (targetUuid) {
-                query = query.or(`uuid.eq."${targetUuid}",user_id.eq."${targetUuid}"`);
+            if (targetUuid && targetUuid !== "usr_unknown") {
+                query = query.eq("uuid", targetUuid);
             } else if (signature) {
                 query = query.eq("signature", signature);
             }
@@ -94,8 +95,8 @@ export default async function handler(req, res) {
             let deleteQuery = supabase.from("notifications").delete();
 
             if (targetUuid && targetUuid !== "usr_unknown") {
-                deleteQuery = deleteQuery.or(`uuid.eq."${targetUuid}",user_id.eq."${targetUuid}"`);
-            } else {
+                deleteQuery = deleteQuery.eq("uuid", targetUuid);
+            } else if (signature) {
                 deleteQuery = deleteQuery.eq("signature", signature);
             }
 
@@ -120,7 +121,7 @@ export default async function handler(req, res) {
 
             const { error: updateErr } = await supabase
                 .from("notifications")
-                .update({ read: true, status: "read" })
+                .update({ read: true })
                 .eq("id", id);
 
             if (updateErr) throw updateErr;
