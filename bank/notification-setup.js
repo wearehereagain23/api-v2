@@ -1,102 +1,192 @@
 import { createClient } from "@supabase/supabase-js";
 import jwt from "jsonwebtoken";
 import ws from "ws";
+import webpush from "web-push";
 
-// Structural Variable Mapping matching core ledger profiles matrix
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Securely instantiate operational client environment with persistent sessions disabled
+const VAPID_PUBLIC_KEY = process.env.PUBLIC_VAPID_KEY || process.env.VAPID_PUBLIC_KEY || "";
+const VAPID_PRIVATE_KEY = process.env.PRIVATE_VAPID_KEY || process.env.VAPID_PRIVATE_KEY || "";
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:admin@onflex.com";
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
     realtime: { transport: ws }
 });
 
-/**
- * Core Controller Route Handler Engine for Push Subscription Actions
- */
-export default async function notificationSetupHandler(req, res) {
-    // CORS Preflight handshake setup execution
-    const requestOrigin = req.headers.origin;
-    if (requestOrigin) {
-        res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+function applyCors(req, res) {
+    const origin = req.headers.origin || "*";
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-signature");
+    if (req.method === "OPTIONS") {
+        res.status(200).end();
+        return true;
     }
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-setting-target");
+    return false;
+}
 
-    if (req.method === "OPTIONS") return res.status(200).end();
+export default async function handler(req, res) {
+    if (applyCors(req, res)) return;
 
-    // Authentication Context Layer Protection
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({ success: false, error: "Access Denied: Auth context missing." });
+    const authHeader = req.headers.authorization || req.headers.Authorization || "";
+    if (!authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ success: false, error: "Unauthorized access credentials missing." });
     }
 
     const token = authHeader.split(" ")[1];
+    let decoded = null;
 
     try {
-        // Decrypt and process JWT Claims identity token packet matrix
-        const decodedClaims = jwt.verify(token, JWT_SECRET);
-        const verifiedUuid = decodedClaims.uuid || decodedClaims.id || (decodedClaims.user && decodedClaims.user.id);
+        decoded = jwt.verify(token, JWT_SECRET);
+    } catch (jwtErr) {
+        return res.status(401).json({ success: false, error: "Session token expired or invalid." });
+    }
 
-        if (!verifiedUuid) {
-            return res.status(401).json({ success: false, error: "Unauthorized Identity verification status." });
-        }
+    try {
+        const isAdmin = Boolean(decoded.adminId || decoded.role === "admin" || decoded.isAdmin);
+        const userUuid = decoded.uuid || decoded.id || decoded.adminId || "admin";
+        const signature = req.headers["x-signature"] || req.body.signature || "onflex";
 
-        const { action, uuid, device_id, subscribers, signature } = req.body;
+        if (req.method === "POST") {
+            const { action, device_id, subscription, title, message, url } = req.body;
 
-        // Validate corporate application ecosystem parameter signature match bounds
-        if (!signature || signature !== "onflex") {
-            return res.status(400).json({ success: false, error: "System access vector validation failed." });
-        }
+            // =========================================================================
+            // CHECK ADMIN DEVICE & SIGNATURE MATCH EXCLUSIVELY
+            // =========================================================================
+            if (action === "check_admin_device") {
+                if (!isAdmin) {
+                    return res.status(403).json({ success: false, error: "Access denied: Not an admin context." });
+                }
 
-        // Verify requesting identity parameter payload matches verified token details
-        if (!uuid || !device_id || String(uuid).trim() !== String(verifiedUuid).trim()) {
-            return res.status(400).json({ success: false, error: "Required account identity parameters are missing or mismatched." });
-        }
+                // Check existing admin subscription with this signature
+                const { data: existingSubs, error: fetchErr } = await supabase
+                    .from("notification_subscribers")
+                    .select("*")
+                    .eq("signature", signature);
 
-        if (action === "subscribe") {
-            if (!subscribers) {
-                return res.status(400).json({ success: false, error: "Push service registration context mapping missing." });
+                if (fetchErr) throw fetchErr;
+
+                if (existingSubs && existingSubs.length > 0) {
+                    const match = existingSubs.find(sub => sub.device_id === device_id);
+
+                    if (match) {
+                        return res.status(200).json({
+                            success: true,
+                            deviceMatches: true,
+                            message: "Admin device verified."
+                        });
+                    } else {
+                        // Signature exists but device doesn't match -> Purge old entries for this signature
+                        await supabase
+                            .from("notification_subscribers")
+                            .delete()
+                            .eq("signature", signature);
+
+                        return res.status(200).json({
+                            success: true,
+                            deviceMatches: false,
+                            repurged: true,
+                            message: "Older admin devices purged."
+                        });
+                    }
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    deviceMatches: false,
+                    repurged: false,
+                    message: "No registered admin device found for this signature."
+                });
             }
 
-            // Synchronize database records safely matching schema requirements including signature
-            const { error } = await supabase
-                .from('notification_subscribers')
-                .upsert({
-                    uuid: uuid,
-                    device_id: device_id,
-                    subscribers: subscribers,
-                    signature: signature // Map parameter payload explicitly to your db schema column
-                }, { onConflict: 'device_id' });
+            // =========================================================================
+            // SUBSCRIBE / UPDATE ADMIN PUSH SUBSCRIPTION
+            // =========================================================================
+            if (action === "subscribe") {
+                if (!device_id || !subscription) {
+                    return res.status(400).json({ success: false, error: "Missing device or subscription details." });
+                }
 
-            if (error) throw error;
+                // Ensure single admin entry per signature
+                if (isAdmin) {
+                    await supabase
+                        .from("notification_subscribers")
+                        .delete()
+                        .eq("signature", signature);
+                }
 
-            return res.status(200).json({ success: true, message: "Device registration synced successfully." });
+                const { error: subErr } = await supabase
+                    .from("notification_subscribers")
+                    .upsert({
+                        uuid: String(userUuid),
+                        device_id: device_id,
+                        subscribers: subscription,
+                        signature: signature
+                    }, { onConflict: "device_id" });
 
-        } else if (action === "unsubscribe") {
-            // Delete subscription trace parameters mapping matching active profile criteria records contexts
-            const { error } = await supabase
-                .from('notification_subscribers')
-                .delete()
-                .match({ device_id: device_id, uuid: uuid });
+                if (subErr) throw subErr;
 
-            if (error) throw error;
+                return res.status(200).json({ success: true, message: "Push subscription successfully established." });
+            }
 
-            return res.status(200).json({ success: true, message: "Device profile credentials removed safely." });
+            // =========================================================================
+            // DISPATCH NOTIFICATION
+            // =========================================================================
+            if (action === "send") {
+                if (!isAdmin) {
+                    return res.status(403).json({ success: false, error: "Admin access required." });
+                }
 
-        } else {
-            return res.status(400).json({ success: false, error: "Unsupported operation matrix signature parameters." });
+                const targetUuid = req.body.uuid;
+                if (!targetUuid || !title || !message) {
+                    return res.status(400).json({ success: false, error: "Target UUID, title, and message are required." });
+                }
+
+                await supabase.from("notifications").insert([{
+                    uuid: targetUuid,
+                    title: title,
+                    message: message,
+                    signature: signature
+                }]);
+
+                const { data: subscribers } = await supabase
+                    .from("notification_subscribers")
+                    .select("device_id, subscribers")
+                    .eq("uuid", targetUuid);
+
+                if (subscribers && subscribers.length > 0) {
+                    const pushPayload = JSON.stringify({
+                        title: title,
+                        body: message,
+                        url: url || "dashboard/index.html"
+                    });
+
+                    for (const row of subscribers) {
+                        if (row.subscribers) {
+                            try {
+                                await webpush.sendNotification(row.subscribers, pushPayload);
+                            } catch (err) {
+                                if (err.statusCode === 404 || err.statusCode === 410) {
+                                    await supabase.from("notification_subscribers").delete().eq("device_id", row.device_id);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return res.status(200).json({ success: true, message: "Notification dispatched successfully." });
+            }
         }
 
+        return res.status(405).json({ success: false, error: "Method not allowed." });
     } catch (err) {
-        console.error("🚨 [Backend Notification Error]:", err.message);
-
-        if (err.name === "JsonWebTokenError" || err.name === "TokenExpiredError") {
-            return res.status(401).json({ success: false, error: "Session token validation dropped or expired." });
-        }
-
-        return res.status(500).json({ success: false, error: "Internal processing error occurred while updating system registry states." });
+        return res.status(500).json({ success: false, error: err.message });
     }
 }
