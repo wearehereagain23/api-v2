@@ -50,8 +50,13 @@ export default async function handler(req, res) {
 
     try {
         const isAdmin = Boolean(decoded.adminId || decoded.role === "admin" || decoded.isAdmin);
-        const userUuid = req.body.uuid || decoded.uuid || decoded.id || decoded.adminId || "admin_root";
         const signature = req.headers["x-signature"] || req.headers["X-Signature"] || req.body.signature || "onflex";
+
+        const requestUuid = String(req.body.uuid || decoded.uuid || decoded.id || decoded.adminId || "").trim();
+        const isAdminUser = Boolean(isAdmin || requestUuid === signature || requestUuid === "1");
+
+        // Force Admin identity to match the project signature ("onflex") instead of hardcoded numbers
+        const targetUuid = isAdminUser ? signature : (requestUuid || "usr_unknown");
 
         // ==========================================
         // 1. GET NOTIFICATIONS LOGS
@@ -83,18 +88,9 @@ export default async function handler(req, res) {
         // ==========================================
         // 2. POST ACTIONS
         // ==========================================
-
-        // Replace Section 2 inside bank/notification-system.js with this:
-
-        // ==========================================
-        // 2. POST ACTIONS
-        // ==========================================
         if (req.method === "POST") {
             const { action, device_id, subscription, subscribers, title, message, url } = req.body || {};
             const pushObj = subscription || subscribers || null;
-
-            const requestUuid = String(req.body.uuid || decoded.uuid || decoded.id || decoded.adminId || "").trim();
-            const isAdminUser = Boolean(isAdmin || requestUuid === signature);
 
             // ==========================================
             // A. CHECK ADMIN DEVICE
@@ -108,18 +104,18 @@ export default async function handler(req, res) {
                     return res.status(400).json({ success: false, error: "Missing device_id parameter." });
                 }
 
-                // 1. Check if THIS specific admin device is already registered
+                // 1. Fetch active admin subscriber entries (matching signature or legacy "1")
                 const { data: existingAdminDevices, error: fetchErr } = await supabase
                     .from("notification_subscribers")
                     .select("device_id, subscribers")
-                    .eq("uuid", signature); // Filter strictly by Admin UUID (e.g. "onflex")
+                    .or(`uuid.eq."${signature}",uuid.eq."1"`);
 
                 if (fetchErr) throw fetchErr;
 
                 const currentDeviceMatch = existingAdminDevices?.find(sub => sub.device_id === device_id);
 
                 if (currentDeviceMatch) {
-                    // ✅ Current device is valid and already registered. NO re-subscription needed!
+                    // ✅ Active device found! Prevents duplicate re-subscriptions
                     return res.status(200).json({
                         success: true,
                         deviceMatches: true,
@@ -127,20 +123,20 @@ export default async function handler(req, res) {
                     });
                 }
 
-                // 2. If this is a NEW admin device, purge only stale admin entries (where uuid === signature)
+                // 2. New device detected: purge stale admin rows (including legacy "1")
                 if (existingAdminDevices && existingAdminDevices.length > 0) {
                     await supabase
                         .from("notification_subscribers")
                         .delete()
-                        .eq("uuid", signature)
-                        .neq("device_id", device_id); // 🔒 Delete old admin devices, leave users untouched
+                        .or(`uuid.eq."${signature}",uuid.eq."1"`)
+                        .neq("device_id", device_id);
                 }
 
                 return res.status(200).json({
                     success: true,
                     deviceMatches: false,
                     repurged: true,
-                    message: "New admin device detected. Old admin subscriptions purged."
+                    message: "New admin device detected. Stale admin subscriptions purged."
                 });
             }
 
@@ -152,18 +148,16 @@ export default async function handler(req, res) {
                     return res.status(400).json({ success: false, error: "Missing device_id or subscription object." });
                 }
 
-                const targetUuid = requestUuid || userUuid;
-
-                // If Admin is subscribing a new device, clean out stale admin tokens first
-                if (isAdminUser || targetUuid === signature) {
+                // Purge older admin devices (or legacy "1" entries) except the active device_id
+                if (isAdminUser) {
                     await supabase
                         .from("notification_subscribers")
                         .delete()
-                        .eq("uuid", signature)
-                        .neq("device_id", device_id); // 🔒 Keep current device if re-subscribing
+                        .or(`uuid.eq."${signature}",uuid.eq."1"`)
+                        .neq("device_id", device_id);
                 }
 
-                // Safe Upsert bound strictly to device_id (prevents duplicate generation)
+                // Upsert subscription strictly locked to unique device_id
                 const { error: subErr } = await supabase
                     .from("notification_subscribers")
                     .upsert({
@@ -202,15 +196,16 @@ export default async function handler(req, res) {
                     return res.status(403).json({ success: false, error: "Admin access required." });
                 }
 
-                const targetUuid = String(req.body.uuid || "").trim();
-                if (!targetUuid || !title || !message) {
+                const sendTargetUuid = String(req.body.uuid || "").trim();
+                if (!sendTargetUuid || !title || !message) {
                     return res.status(400).json({ success: false, error: "Target UUID, title, and message are required." });
                 }
 
+                // Save notification log
                 const { error: dbError } = await supabase
                     .from("notifications")
                     .insert([{
-                        uuid: targetUuid,
+                        uuid: sendTargetUuid,
                         title: title,
                         message: message,
                         signature: signature
@@ -218,13 +213,13 @@ export default async function handler(req, res) {
 
                 if (dbError) throw dbError;
 
-                const rawUuid = targetUuid.replace(/^usr_/, '');
-                const altUuid = targetUuid.startsWith('usr_') ? targetUuid : `usr_${targetUuid}`;
+                const rawUuid = sendTargetUuid.replace(/^usr_/, '');
+                const altUuid = sendTargetUuid.startsWith('usr_') ? sendTargetUuid : `usr_${sendTargetUuid}`;
 
                 const { data: activeSubscribers, error: fetchErr } = await supabase
                     .from("notification_subscribers")
                     .select("device_id, subscribers, uuid, signature")
-                    .or(`uuid.eq."${targetUuid}",uuid.eq."${rawUuid}",uuid.eq."${altUuid}"`);
+                    .or(`uuid.eq."${sendTargetUuid}",uuid.eq."${rawUuid}",uuid.eq."${altUuid}"`);
 
                 if (fetchErr) {
                     console.error("❌ Error fetching subscriber devices:", fetchErr.message);
@@ -252,6 +247,7 @@ export default async function handler(req, res) {
                             } catch (pErr) {
                                 console.error(`❌ Push dispatch failed for device ${row.device_id}:`, pErr.statusCode, pErr.message);
 
+                                // Clean up expired/unsubscribed push endpoints
                                 if (pErr.statusCode === 404 || pErr.statusCode === 410) {
                                     await supabase
                                         .from("notification_subscribers")
@@ -267,7 +263,7 @@ export default async function handler(req, res) {
                     success: true,
                     message: pushDeliveredCount > 0
                         ? `Notification delivered (${pushDeliveredCount} device alert(s) sent).`
-                        : `Notification saved to inbox (No active push devices matched for UUID: ${targetUuid}).`,
+                        : `Notification saved to inbox (No active push devices matched for UUID: ${sendTargetUuid}).`,
                     deliveredCount: pushDeliveredCount
                 });
             }
