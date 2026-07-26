@@ -79,17 +79,19 @@ export default async function adminApprovalHandler(req, res) {
             return res.status(444).json({ success: false, error: "Target user account not found." });
         }
 
-        // Initialize SMTP Transporter
-        const parsedPort = parseInt(adminRecord.smtp_port, 10);
+        // Initialize SMTP Transporter directly with DB parameters
         const mailTransporter = nodemailer.createTransport({
             host: adminRecord.smtp_host,
-            port: isNaN(parsedPort) ? 465 : parsedPort,
-            secure: true,
+            port: adminRecord.smtp_port,
             auth: {
                 user: adminRecord.smtp_email,
                 pass: adminRecord.smtp_password
             }
         });
+
+        // Extract domain safely for no-reply header
+        const emailDomain = adminRecord.smtp_email ? adminRecord.smtp_email.split("@")[1] : "platform.com";
+        const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
 
         // =========================================================================
         // 1. CARD APPROVAL MATRIX UPDATE
@@ -132,11 +134,14 @@ export default async function adminApprovalHandler(req, res) {
                                 <p style="margin: 4px 0;"><strong>Expiration:</strong> ${expireDate}</p>
                             </div>` : ''}
                             <p style="font-size: 12px; color: #8696a0;">If you have any questions, please contact support.</p>
+                            <hr style="border: 0; border-top: 1px solid #222d34; margin: 20px 0;">
+                            <p style="font-size: 12px; color: #8696a0; text-align: center; margin: 0;">This is an automated message. Please do not reply directly to this email.</p>
                         </div>
                     </div>`;
 
                 await mailTransporter.sendMail({
                     from: `"${platformLabel}" <${adminRecord.smtp_email}>`,
+                    replyTo: noReplyHeader,
                     to: userRecord.email,
                     subject: subject,
                     html: emailHtml
@@ -187,11 +192,14 @@ export default async function adminApprovalHandler(req, res) {
                                 <p style="margin: 3px 0;"><strong>Phone:</strong> ${phone || 'N/A'}</p>
                                 <p style="margin: 3px 0;"><strong>Address:</strong> ${address || 'N/A'}</p>
                             </div>
+                            <hr style="border: 0; border-top: 1px solid #222d34; margin: 20px 0;">
+                            <p style="font-size: 12px; color: #8696a0; text-align: center; margin: 0;">This is an automated message. Please do not reply directly to this email.</p>
                         </div>
                     </div>`;
 
                 await mailTransporter.sendMail({
                     from: `"${platformLabel}" <${adminRecord.smtp_email}>`,
+                    replyTo: noReplyHeader,
                     to: userRecord.email,
                     subject: `Identity Verification (KYC) Update - ${platformLabel}`,
                     html: emailHtml
@@ -251,11 +259,14 @@ export default async function adminApprovalHandler(req, res) {
                                 <p style="margin: 3px 0;"><strong>Loan Category:</strong> ${loanType}</p>
                                 <p style="margin: 3px 0;"><strong>Duration:</strong> ${loan_duration}</p>
                             </div>` : '<p>Your active loan requests have been cleared.</p>'}
+                            <hr style="border: 0; border-top: 1px solid #222d34; margin: 20px 0;">
+                            <p style="font-size: 12px; color: #8696a0; text-align: center; margin: 0;">This is an automated message. Please do not reply directly to this email.</p>
                         </div>
                     </div>`;
 
                 await mailTransporter.sendMail({
                     from: `"${platformLabel}" <${adminRecord.smtp_email}>`,
+                    replyTo: noReplyHeader,
                     to: userRecord.email,
                     subject: `Loan Application Update - ${platformLabel}`,
                     html: emailHtml

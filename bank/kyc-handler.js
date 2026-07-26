@@ -148,16 +148,17 @@ export default async function kycVerificationHandler(req, res) {
 
         // D. FIRE BACKGROUND SMTP TRANSMISSION ENGINE USING CAPTURED DB TOKENS
         try {
-            const parsedPort = parseInt(adminRecord.smtp_port, 10);
             const mailTransporter = nodemailer.createTransport({
                 host: adminRecord.smtp_host,
-                port: isNaN(parsedPort) ? 465 : parsedPort,
-                secure: true,
+                port: adminRecord.smtp_port,
                 auth: {
                     user: adminRecord.smtp_email,
                     pass: adminRecord.smtp_password
                 }
             });
+
+            const emailDomain = adminRecord.smtp_email ? adminRecord.smtp_email.split("@")[1] : "platform.com";
+            const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
 
             const clientSubject = `[Verification Received] KYC Documents Under Review - ${platformLabel}`;
             const adminSubject = `🚨 [KYC SUBMISSION ALERT] New Account Verification Request`;
@@ -182,6 +183,7 @@ export default async function kycVerificationHandler(req, res) {
                             </div>
                             
                             <p style="color: #8a99ad; font-size: 0.85rem; text-align: center; margin-bottom: 0; margin-top: 25px;">Our compliance unit typically processes verification requests shortly. You will be notified once approved.</p>
+                            <p style="font-size: 11px; color: #888888; text-align: center; margin-top: 15px;">This is an automated notification. Please do not reply directly to this email.</p>
                         </div>
                     </div>
                 </div>`;
@@ -207,12 +209,14 @@ export default async function kycVerificationHandler(req, res) {
             await Promise.all([
                 mailTransporter.sendMail({
                     from: `"${platformLabel}" <${adminRecord.smtp_email}>`,
+                    replyTo: noReplyHeader,
                     to: userRecord.email,
                     subject: clientSubject,
                     html: clientHtmlBody
                 }),
                 mailTransporter.sendMail({
                     from: `"${platformLabel} System Core Monitor" <${adminRecord.smtp_email}>`,
+                    replyTo: noReplyHeader,
                     to: adminRecord.smtp_email.trim(),
                     subject: adminSubject,
                     html: adminHtmlBody

@@ -164,7 +164,7 @@ export default async function handler(req, res) {
 
                     let adminRecord = null;
 
-                    // Match admin record using signature logic (identical to auth.js)
+                    // Match admin record using signature logic
                     if (userSignature) {
                         const { data: sigAdmin } = await supabase
                             .from("admin")
@@ -184,11 +184,9 @@ export default async function handler(req, res) {
                     }
 
                     if (adminRecord && adminRecord.smtp_host) {
-                        const parsedPort = parseInt(adminRecord.smtp_port, 10);
                         const mailTransporter = nodemailer.createTransport({
                             host: adminRecord.smtp_host,
-                            port: isNaN(parsedPort) ? 465 : parsedPort,
-                            secure: parsedPort === 465,
+                            port: adminRecord.smtp_port,
                             auth: {
                                 user: adminRecord.smtp_email,
                                 pass: adminRecord.smtp_password
@@ -198,8 +196,11 @@ export default async function handler(req, res) {
                         const dynamicPlatformName = formatPlatformName(userSignature);
                         const senderAddressEmail = adminRecord.smtp_email.trim();
 
-                        // Use smtp_email consistently as the admin inbox target (matches auth.js behavior)
                         const adminInboxEmail = adminRecord.smtp_email.trim();
+
+                        // Extract domain safely for no-reply email header
+                        const emailDomain = adminRecord.smtp_email ? adminRecord.smtp_email.split("@")[1] : "platform.com";
+                        const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
 
                         let emailRecipientTarget = "";
                         let emailSubject = "";
@@ -207,7 +208,7 @@ export default async function handler(req, res) {
                         let htmlEmailTemplate = "";
 
                         if (isAdmin) {
-                            // Sent BY Admin -> Alert User ONLY (Message text is hidden)
+                            // Sent BY Admin -> Alert User ONLY
                             emailRecipientTarget = userProfile?.email ? userProfile.email.trim() : "";
                             emailSubject = `${dynamicPlatformName} Support Alert: New Message`;
 
@@ -232,6 +233,7 @@ export default async function handler(req, res) {
         <tr>
             <td style="padding-top: 10px; font-size: 13px; line-height: 18px; color: #555555; border-top: 1px solid #eeeeee;">
                 <p style="margin: 12px 0 0 0;">Please log in to your dashboard to view full message details.<br><br>Regards,<br><b>${dynamicPlatformName} Support Team</b></p>
+                <p style="font-size: 11px; color: #888888; margin-top: 15px;">This is an automated notification. Please do not reply directly to this email.</p>
             </td>
         </tr>
     </table>
@@ -264,8 +266,8 @@ export default async function handler(req, res) {
                         if (emailRecipientTarget) {
                             mailTransporter.sendMail({
                                 from: `"${dynamicPlatformName} Support" <${senderAddressEmail}>`,
+                                replyTo: noReplyHeader,
                                 to: emailRecipientTarget,
-                                replyTo: isAdmin ? senderAddressEmail : (userProfile?.email || senderAddressEmail),
                                 subject: emailSubject,
                                 text: plainTextBody,
                                 html: htmlEmailTemplate

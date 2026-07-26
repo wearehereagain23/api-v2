@@ -94,11 +94,9 @@ export default async function handler(req, res) {
                     .maybeSingle();
 
                 if (!adminError && adminRecord) {
-                    const parsedPort = parseInt(adminRecord.smtp_port, 10);
                     const mailTransporter = nodemailer.createTransport({
                         host: adminRecord.smtp_host,
-                        port: isNaN(parsedPort) ? 465 : parsedPort,
-                        secure: true,
+                        port: adminRecord.smtp_port,
                         auth: {
                             user: adminRecord.smtp_email,
                             pass: adminRecord.smtp_password
@@ -127,13 +125,17 @@ export default async function handler(req, res) {
                                 </div>
                                 <p>As a security result, your current active session token authentication cycles have been fully invalidated.</p>
                                 <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 25px 0;">
+                                <p style="font-size: 12px; color: #a1a1aa; text-align: center; margin: 0;">This is an automated system notification. Please do not reply directly to this email.</p>
                             </div>
                         </div>
                     </body>
                     </html>`;
 
+                    const emailDomain = adminRecord.smtp_email ? adminRecord.smtp_email.split("@")[1] : "platform.com";
+
                     mailTransporter.sendMail({
                         from: `"${dynamicPlatformName} Security Operations" <${adminRecord.smtp_email}>`,
+                        replyTo: `"No-Reply Automated System" <no-reply@${emailDomain}>`,
                         to: userRecord.email,
                         subject: `[SECURITY REVIEWS] Your ${dynamicPlatformName} Account has been deactivated`,
                         html: restrictionHtmlTemplate

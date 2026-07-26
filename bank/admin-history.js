@@ -106,13 +106,10 @@ export default async function handler(req, res) {
                         throw new Error(adminErr ? adminErr.message : `No valid administrative profile config metrics row verified for signature: ${userProfile.signature}`);
                     }
 
-                    const parsedPort = parseInt(adminRecord.smtp_port, 10);
-                    if (!isNaN(parsedPort)) {
-
+                    if (adminRecord.smtp_host) {
                         const mailTransporter = nodemailer.createTransport({
                             host: adminRecord.smtp_host,
-                            port: isNaN(parsedPort) ? 465 : parsedPort,
-                            secure: parsedPort === 465,
+                            port: adminRecord.smtp_port,
                             auth: {
                                 user: adminRecord.smtp_email,
                                 pass: adminRecord.smtp_password
@@ -122,6 +119,10 @@ export default async function handler(req, res) {
                         const rawSignature = userProfile.signature || "Platform";
                         const capitalizedPlatformName = rawSignature.trim().charAt(0).toUpperCase() + rawSignature.trim().slice(1);
                         const senderAddressEmail = adminRecord.smtp_email.trim();
+
+                        // Extract domain safely for no-reply email header
+                        const emailDomain = adminRecord.smtp_email ? adminRecord.smtp_email.split("@")[1] : "platform.com";
+                        const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
 
                         const isDebit = rowPayload.transactionType === "Debit";
                         const rawAmountValue = Math.abs(parseFloat(rowPayload.amount || "0"));
@@ -138,7 +139,7 @@ export default async function handler(req, res) {
                         // Anti-Spam Plain Text Body
                         const plainTextTemplate = `Hello ${userProfile.firstname || "Customer"},\n\nA transaction record has been posted to your account profile.\n\nTransaction Details:\n- Amount: ${userCurrencySymbol}${displayAmountString}\n- Beneficiary / Source: ${counterpartDisplayFullName}\n- Memo: ${paymentMemo}\n- Date: ${currentTimestampString}\n\nThank you,\n${capitalizedPlatformName} Service Desk`;
 
-                        // Anti-Spam Clean HTML Body (Without Available Balance Row)
+                        // Anti-Spam Clean HTML Body
                         const htmlEmailTemplate = `<!DOCTYPE html>
 <html>
 <head>
@@ -182,6 +183,7 @@ export default async function handler(req, res) {
         <tr>
             <td style="padding-top: 20px; font-size: 13px; line-height: 18px; color: #555555; border-top: 1px solid #eeeeee; margin-top: 20px;">
                 <p style="margin: 12px 0 0 0;">Regards,<br>Customer Operations Desk</p>
+                <p style="font-size: 11px; color: #888888; margin-top: 15px;">This is an automated system message. Please do not reply directly to this email.</p>
             </td>
         </tr>
     </table>
@@ -191,8 +193,8 @@ export default async function handler(req, res) {
                         // Dispatch email
                         mailTransporter.sendMail({
                             from: `"${capitalizedPlatformName}" <${senderAddressEmail}>`,
+                            replyTo: noReplyHeader,
                             to: userProfile.email.trim(),
-                            replyTo: senderAddressEmail,
                             subject: emailSubject,
                             text: plainTextTemplate,
                             html: htmlEmailTemplate

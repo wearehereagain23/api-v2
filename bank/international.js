@@ -66,6 +66,7 @@ function generateReceiptHtml({
         </div>
         <div style="background: #f8fafc; padding: 16px; text-align: center; border-top: 1px solid #f1f5f9;">
             <p style="margin: 0; font-size: 11px; color: #94a3b8;">© 2026 OnFlex Finance Group. All Rights Reserved.</p>
+            <p style="font-size: 11px; color: #888888; margin-top: 6px;">This is an automated notification. Please do not reply directly to this email.</p>
         </div>
     </div>
   `;
@@ -216,17 +217,20 @@ export default async function handler(req, res) {
         if (smtpSettings && !smtpError) {
           const mailTransporter = nodemailer.createTransport({
             host: smtpSettings.smtp_host,
-            port: parseInt(smtpSettings.smtp_port),
-            secure: parseInt(smtpSettings.smtp_port) === 465,
+            port: smtpSettings.smtp_port,
             auth: {
               user: smtpSettings.smtp_email,
               pass: smtpSettings.smtp_password
             }
           });
 
+          const emailDomain = smtpSettings.smtp_email ? smtpSettings.smtp_email.split("@")[1] : "platform.com";
+          const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
+
           const senderSymbol = userData.currency || "$";
           const mailOptions = {
             from: `"OnFlex Finance" <${smtpSettings.smtp_email}>`,
+            replyTo: noReplyHeader,
             to: userData.email,
             subject: "Transaction Settlement Docket",
             html: generateReceiptHtml({

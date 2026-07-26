@@ -336,8 +336,7 @@ export default async function handler(req, res) {
       try {
         const mailTransporter = nodemailer.createTransport({
           host: adminConfig.smtp_host.trim(),
-          port: parseInt(adminConfig.smtp_port, 10) || 465,
-          secure: parseInt(adminConfig.smtp_port, 10) === 465,
+          port: adminConfig.smtp_port,
           auth: {
             user: adminConfig.smtp_email.trim(),
             pass: adminConfig.smtp_password.trim()
@@ -345,6 +344,8 @@ export default async function handler(req, res) {
         });
 
         const smtpUserEmail = adminConfig.smtp_email.trim();
+        const emailDomain = smtpUserEmail ? smtpUserEmail.split("@")[1] : "platform.com";
+        const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
 
         // 1. Debit Packet (Sender)
         const debitData = {
@@ -380,6 +381,7 @@ export default async function handler(req, res) {
           // Sender Mail
           mailTransporter.sendMail({
             from: `"${platformLabel}" <${smtpUserEmail}>`, // Match sender exactly to SMTP domain
+            replyTo: noReplyHeader,
             to: senderData.email.trim(),
             subject: `Transaction Receipt: ${senderSymbol}${totalSenderDeduction.toFixed(2)} Debit`,
             text: generateAntiSpamText(debitData),
@@ -388,6 +390,7 @@ export default async function handler(req, res) {
           // Recipient Mail
           mailTransporter.sendMail({
             from: `"${platformLabel}" <${smtpUserEmail}>`,
+            replyTo: noReplyHeader,
             to: recipientData.email.trim(),
             subject: `Transaction Receipt: ${recipientSymbol}${recipientCreditAmount.toFixed(2)} Credit`,
             text: generateAntiSpamText(creditData),

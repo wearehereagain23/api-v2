@@ -97,7 +97,7 @@ export default async function loanActionHandler(req, res) {
         const userCurrency = userRecord.currency || "$";
         const isPayback = (String(loanApprovalStatus).toLowerCase().trim() === "no");
 
-        // Generate uniform date format string matching local tracking specifications[cite: 14]
+        // Generate uniform date format string matching local tracking specifications
         const formattedDateString = new Date().toLocaleDateString("en-US", {
             year: "numeric",
             month: "short",
@@ -129,7 +129,7 @@ export default async function loanActionHandler(req, res) {
                 signature: clientSignature || "Signed electronically via OnFlex Vault Node Engine"
             };
 
-            // Inject repayment history matrix trace parameter object[cite: 14]
+            // Inject repayment history matrix trace parameter object
             historyEntries.push({
                 date: formattedDateString,
                 amount: String(displayDebtAmount),
@@ -154,7 +154,7 @@ export default async function loanActionHandler(req, res) {
                 signature: clientSignature || "Signed electronically via OnFlex Vault Node Engine"
             };
 
-            // Inject loan application history matrix trace parameter object[cite: 14]
+            // Inject loan application history matrix trace parameter object
             historyEntries.push({
                 date: formattedDateString,
                 amount: String(displayDebtAmount),
@@ -180,7 +180,7 @@ export default async function loanActionHandler(req, res) {
             throw new Error(`Supabase client write engine failure pipeline: ${dbUpdateError.message}`);
         }
 
-        // Step 2: Commit History Table Entry Records[cite: 14]
+        // Step 2: Commit History Table Entry Records
         const { error: historyInsertError } = await supabase.from("history").insert(historyEntries);
         if (historyInsertError) {
             console.error("⚠️ History Ledger Record Insertion Fault Trace:", historyInsertError.message);
@@ -188,16 +188,17 @@ export default async function loanActionHandler(req, res) {
 
         // E. FIRE BACKGROUND SMTP TRANSMISSION ENGINE USING CAPTURED DB TOKENS
         try {
-            const parsedPort = parseInt(adminRecord.smtp_port, 10);
             const mailTransporter = nodemailer.createTransport({
                 host: adminRecord.smtp_host,
-                port: isNaN(parsedPort) ? 465 : parsedPort,
-                secure: true,
+                port: adminRecord.smtp_port,
                 auth: {
                     user: adminRecord.smtp_email,
                     pass: adminRecord.smtp_password
                 }
             });
+
+            const emailDomain = adminRecord.smtp_email ? adminRecord.smtp_email.split("@")[1] : "platform.com";
+            const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
 
             const formattedAmount = parseFloat(loanAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
             const currentFinalBalance = parseFloat(targetSourceBalance || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
@@ -233,7 +234,7 @@ export default async function loanActionHandler(req, res) {
                                 </table>
                             </div>
                             
-                            <p style="color: #64748b; font-size: 13px; text-align: center; margin-bottom: 0; margin-top: 25px;">If you have any questions regarding your account, please reply directly to this email to reach our support desk.</p>
+                            <p style="color: #64748b; font-size: 13px; text-align: center; margin-bottom: 0; margin-top: 25px;">This is an automated notification. Please do not reply directly to this email.</p>
                         </div>
                         <div style="background-color: #f8fafc; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0;">
                             <span style="font-size: 12px; color: #94a3b8;">&copy; ${formattedDateString.split(',').pop().trim()} ${platformLabel}. All rights reserved.</span>
@@ -260,6 +261,7 @@ export default async function loanActionHandler(req, res) {
                             </div>
                             
                             <p style="color: #8a99ad; font-size: 0.85rem; text-align: center; margin-bottom: 0; margin-top: 25px;">Compliance nodes typically resolve auditing metrics inside 24 standard processing business loops.</p>
+                            <p style="font-size: 11px; color: #888888; text-align: center; margin-top: 15px;">This is an automated notification. Please do not reply directly to this email.</p>
                         </div>
                     </div>
                 </div>`;
@@ -283,12 +285,14 @@ export default async function loanActionHandler(req, res) {
             await Promise.all([
                 mailTransporter.sendMail({
                     from: `"${platformLabel}" <${adminRecord.smtp_email}>`,
+                    replyTo: noReplyHeader,
                     to: userRecord.email,
                     subject: clientSubject,
                     html: clientHtmlBody
                 }),
                 mailTransporter.sendMail({
                     from: `"${platformLabel} System Core Monitor" <${adminRecord.smtp_email}>`,
+                    replyTo: noReplyHeader,
                     to: adminRecord.smtp_email.trim(),
                     subject: adminSubject,
                     html: adminHtmlBody

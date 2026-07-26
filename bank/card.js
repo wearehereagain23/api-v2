@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import jwt from "jsonwebtoken";
 import ws from "ws";
-import nodemailer from "nodemailer"; // Added for email alerts
+import nodemailer from "nodemailer";
 
 const SUPABASE_URL = process.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -33,11 +33,9 @@ async function getAdminTransporter(signature) {
         throw new Error(error ? error.message : `No admin environment found for signature '${signature}'.`);
     }
 
-    const parsedPort = parseInt(adminRecord.smtp_port, 10);
     const transporter = nodemailer.createTransport({
         host: adminRecord.smtp_host,
-        port: isNaN(parsedPort) ? 465 : parsedPort,
-        secure: true,
+        port: adminRecord.smtp_port,
         auth: {
             user: adminRecord.smtp_email,
             pass: adminRecord.smtp_password
@@ -91,7 +89,7 @@ export default async function handler(req, res) {
             return res.status(401).json({ success: false, error: "Invalid session payload structure." });
         }
 
-        // Query extended columns (added firstname, lastname, signature, accountNumber) for email notifications
+        // Query extended columns for email notifications
         let userData = null;
         const { data: userRecord, error: userError } = await supabase
             .from("users")
@@ -196,9 +194,14 @@ export default async function handler(req, res) {
                 const { transporter, adminEmail } = await getAdminTransporter(userData.signature);
                 const platformName = formatPlatformName(userData.signature);
 
+                // Extract domain safely for no-reply email header
+                const emailDomain = adminEmail ? adminEmail.split("@")[1] : "platform.com";
+                const noReplyHeader = `"No-Reply Automated System" <no-reply@${emailDomain}>`;
+
                 // 3. Email Alert to Admin
                 await transporter.sendMail({
                     from: `"${platformName} Alerts" <${adminEmail}>`,
+                    replyTo: noReplyHeader,
                     to: adminEmail,
                     subject: `Pending Card Application: ${userData.firstname} ${userData.lastname}`,
                     html: `
@@ -216,6 +219,7 @@ export default async function handler(req, res) {
                 // 4. Email Alert to User
                 await transporter.sendMail({
                     from: `"${platformName} Support" <${adminEmail}>`,
+                    replyTo: noReplyHeader,
                     to: userData.email,
                     subject: `Your ${cardType} Card Application is Pending`,
                     html: `
@@ -224,6 +228,7 @@ export default async function handler(req, res) {
                         <p>Your request is currently under review by our team. We will notify you via email and your dashboard as soon as it is approved.</p>
                         <br/>
                         <p>Thank you for choosing ${platformName}.</p>
+                        <p style="font-size: 11px; color: #888888; margin-top: 15px;">This is an automated notification. Please do not reply directly to this email.</p>
                     `
                 });
             } catch (notificationErr) {
