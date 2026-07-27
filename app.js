@@ -181,8 +181,8 @@ app.all("/api/admin-update-user", adaptHandler(adminUpdateUserHandler));
 
 app.all("/api/notifications", adaptHandler(notificationSystemHandler));
 app.all("/api/notifications/read", adaptHandler(notificationSystemHandler));
-app.post("/bank/register-user", registerUserHandler);
-app.post("/bank/login-user", loginUserHandler);
+app.post("/api/register-user", adaptHandler(registerUserHandler));
+app.post("/api/login-user", adaptHandler(loginUserHandler));
 app.all("/api/admin-settings", adaptHandler(adminSettingsHandler));
 app.all("/api/verify-pin", adaptHandler(verifyPinHandler));
 
