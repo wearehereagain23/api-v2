@@ -60,6 +60,7 @@ export default async function handler(req, res) {
             });
         }
 
+
         // ==========================================
         // METHOD: POST (APPEND LOG LINE WITH LIVE SMTP ALERT)
         // ==========================================
@@ -69,6 +70,23 @@ export default async function handler(req, res) {
             // Intercept the check state flag before passing to database mutation layers
             const shouldDispatchEmailAlert = rowPayload.dispatchEmailAlert === true;
             delete rowPayload.dispatchEmailAlert;
+
+            // 1. FETCH AUTHORITATIVE USER PROFILE TO GET THE EXACT SIGNATURE
+            const { data: userProfile, error: profileErr } = await supabase
+                .from("users")
+                .select("email, firstname, lastname, signature, accountNumber, currency, accountBalance")
+                .eq("uuid", rowPayload.uuid)
+                .maybeSingle();
+
+            if (profileErr || !userProfile) {
+                return res.status(400).json({
+                    success: false,
+                    error: profileErr ? profileErr.message : "Target profile context matching target parameters missing inside database arrays."
+                });
+            }
+
+            // 2. OVERWRITE/ENFORCE THE SIGNATURE FROM USER PROFILE
+            rowPayload.signature = userProfile.signature;
 
             // Commit transaction history logs row entry line to database storage
             const { data: insertedData, error: insertError } = await supabase
@@ -84,18 +102,7 @@ export default async function handler(req, res) {
             // =============================================================
             if (shouldDispatchEmailAlert) {
                 try {
-                    // Step 1: Query the user's primary metadata profile data attributes layer
-                    const { data: userProfile, error: profileErr } = await supabase
-                        .from("users")
-                        .select("email, firstname, lastname, signature, accountNumber, currency, accountBalance")
-                        .eq("uuid", rowPayload.uuid)
-                        .maybeSingle();
-
-                    if (profileErr || !userProfile) {
-                        throw new Error(profileErr ? profileErr.message : "Target profile context matching target parameters missing inside database arrays.");
-                    }
-
-                    // Step 2: Query Admin SMTP settings matching the user signature
+                    // Query Admin SMTP settings matching the user signature
                     const { data: adminRecord, error: adminErr } = await supabase
                         .from("admin")
                         .select("smtp_host, smtp_port, smtp_password, smtp_email")
