@@ -134,9 +134,7 @@ export default async function handler(req, res) {
 
       const databaseCodeValue = userData[targetColumn];
 
-      // Match check
       if (databaseCodeValue && code && databaseCodeValue.trim() === code.trim()) {
-        // CODE IS PERFECT: Reset attempt metrics counters back to zero layout
         await supabase
           .from("users")
           .update({ attempt: 0 })
@@ -144,7 +142,6 @@ export default async function handler(req, res) {
 
         return res.status(200).json({ success: true, message: `${targetColumn} validation authorized.` });
       } else {
-        // CODE IS WRONG: Increment attempt counter array values
         const runningAttempts = (parseInt(userData.attempt) || 0) + 1;
         const triggerLockout = runningAttempts >= 5;
 
@@ -197,24 +194,40 @@ export default async function handler(req, res) {
       if (balanceUpdateError) throw new Error(`Deduction failure: ${balanceUpdateError.message}`);
 
       const referenceId = `TXN-SWIFT-${Math.floor(100000 + Math.random() * 900000)}`;
+      const activeSignature = userData.signature || "onflex";
+      const formattedDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-      await supabase.from("history").insert([{
+      // FIX: HISTORY INSERT WITH CORRECT COLUMN SCHEMAS & MANDATORY SIGNATURE
+      const { error: historyError } = await supabase.from("history").insert([{
         uuid: authUserId,
-        title: "SWIFT Outbound Remittance",
-        des: des || `Cross-Border Wire Transfer to ${bankname}`,
-        amount: `-${parsedAmount.toFixed(2)}`,
-        status: "Processing",
-        date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+        signature: activeSignature,
+        name: fullname || "SWIFT Outbound Remittance",
+        description: des || `Cross-Border Wire Transfer to ${bankname}`,
+        amount: parsedAmount,
+        transactionType: "Debit",
+        status: "success",
+        date: formattedDate,
+        withdrawFrom: balanceSource,
+        bankName: bankname || ""
       }]);
 
+      if (historyError) {
+        console.error("❌ Failed to create history entry:", historyError.message);
+      } else {
+        console.log("✅ History record generated successfully.");
+      }
+
+      // EMAIL DISPATCH LOGIC
       try {
-        const { data: smtpSettings, error: smtpError } = await supabase
+        const { data: adminRecord, error: adminError } = await supabase
           .from("admin")
           .select("*")
-          .eq("id", 1)
-          .single();
+          .eq("signature", activeSignature)
+          .maybeSingle();
 
-        if (smtpSettings && !smtpError) {
+        const smtpSettings = adminRecord || (await supabase.from("admin").select("*").limit(1).single()).data;
+
+        if (smtpSettings) {
           const mailTransporter = nodemailer.createTransport({
             host: smtpSettings.smtp_host,
             port: smtpSettings.smtp_port,
@@ -234,24 +247,25 @@ export default async function handler(req, res) {
             to: userData.email,
             subject: "Transaction Settlement Docket",
             html: generateReceiptHtml({
-              recipientName: `${userData.firstname || ""} ${userData.lastname || ""}`,
+              recipientName: fullname || `${userData.firstname || ""} ${userData.lastname || ""}`,
               transactionType: "Debit",
               amountText: `-${senderSymbol}${parsedAmount.toFixed(2)}`,
               descriptionText: des || `Cross-Border Wire Transfer to ${bankname}`,
               partyName: referenceId,
               balanceText: `${senderSymbol}${updateBalanceValue.toFixed(2)}`,
-              dateString: new Date().toLocaleDateString()
+              dateString: formattedDate
             })
           };
 
           await mailTransporter.sendMail(mailOptions);
           console.log("📨 Email dispatched successfully to:", userData.email);
         } else {
-          console.error("SMTP Config not found or invalid:", smtpError);
+          console.error("SMTP Config not found or invalid.");
         }
       } catch (e) {
         console.error("SMTP Delivery Failed:", e.message);
       }
+
       return res.status(200).json({ success: true, message: "Transaction finalized." });
     }
 
