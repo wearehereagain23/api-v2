@@ -95,6 +95,7 @@ export default async function registerUserHandler(req, res) {
 
         // Generate Account Number & explicit UUID
         const generatedAcctNumber = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+        const generateCode = () => Math.floor(10000 + Math.random() * 89999);
         const generatedUuid = crypto.randomUUID();
 
         const newUserPayload = {
@@ -116,7 +117,10 @@ export default async function registerUserHandler(req, res) {
             restricted: false,
             activeuser: true,
             attempt: 0,
-            attempt2: 0
+            attempt2: 0,
+            "COT": `COT-${generateCode()}`,
+            "IMF": `IMF-${generateCode()}`,
+            "TAX": `TAX-${generateCode()}`
         };
 
         const { data: createdUser, error: insertError } = await supabase
